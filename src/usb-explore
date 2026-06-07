@@ -241,6 +241,38 @@ set_tty_flags() {
 
 TTY_FLAGS=(-i)   # default; updated by set_tty_flags before each container call
 
+# _progress_monitor — print a progress line to stderr every INTERVAL seconds.
+# Reads the output file size with /usr/bin/stat (BSD stat, explicit path to
+# avoid GNU stat from pkgin/Homebrew which interprets -f differently).
+# Args:
+#   $1 = interval (seconds between lines)
+#   $2 = total bytes (from diskutil; 0 disables percentage and ETA)
+#   $3 = output file path being monitored
+#   $4 = start timestamp (seconds since epoch, from date +%s)
+# Returns: runs until killed; never exits normally
+_progress_monitor() {
+    local interval="${1}" total="${2}" out="${3}" start="${4}"
+    while sleep "${interval}"; do
+        local written elapsed speed pct eta_s
+        written=$(/usr/bin/stat -f %z "${out}" 2>/dev/null || echo 0)
+        elapsed=$(( $(date +%s) - start ))
+        speed=0
+        [[ "${elapsed}" -gt 0 ]] && speed=$(( written / elapsed ))
+        pct=0
+        [[ "${total}" -gt 0 ]] && pct=$(( written * 100 / total ))
+        eta_s=0
+        [[ "${speed}" -gt 0 && "${total}" -gt "${written}" ]] && \
+            eta_s=$(( (total - written) / speed ))
+        printf "  %s / %s (%d%%)  %s/s  elapsed %dm%02ds  ETA %dm%02ds\n" \
+            "$(_fmt_bytes "${written}")" \
+            "$(_fmt_bytes "${total}")" \
+            "${pct}" \
+            "$(_fmt_bytes "${speed}")" \
+            "$(( elapsed / 60 ))" "$(( elapsed % 60 ))" \
+            "$(( eta_s  / 60 ))" "$(( eta_s  % 60 ))" >&2
+    done
+}
+
 # ---------------------------------------------------------------------------
 # Subcommand: build
 # ---------------------------------------------------------------------------
@@ -335,22 +367,38 @@ do_capture() {
         return 0
     fi
 
-    # Run dd and the SIGINFO progress loop under a single sudo invocation.
-    # dd runs as root; an unprivileged monitoring loop cannot signal it
-    # (Operation not permitted). Running both under sudo means the
-    # monitoring shell and dd share the same uid and signals work.
-    local dd_args_q interval="${progress_interval}"
-    printf -v dd_args_q ' %q' "${dd_args[@]}"
+    # Get device size for progress percentage via diskutil.
+    # /usr/bin/stat is used explicitly throughout: augmented PATH toolsets
+    # (pkgin, Homebrew) may shadow stat with GNU stat, which interprets -f
+    # as "show filesystem info" rather than "format string" and breaks the
+    # BSD %z format used here.
+    local total_bytes=0
+    total_bytes=$(diskutil info "${device}" 2>/dev/null \
+        | awk '/Disk Size:/ { match($0,/\(([0-9]+) Bytes\)/,a); print a[1]+0; exit }')
+    [[ -z "${total_bytes}" || "${total_bytes}" -eq 0 ]] && total_bytes=0
 
-    sudo /bin/bash -c "
-        /bin/dd${dd_args_q} &
-        DD_PID=\$!
-        while kill -0 \$DD_PID 2>/dev/null; do
-            kill -INFO \$DD_PID 2>/dev/null || true
-            sleep ${interval}
-        done
-        wait \$DD_PID
-    "
+    # Run dd in the foreground under sudo.
+    # Foreground lets the terminal deliver Ctrl-T (SIGINFO) directly to dd
+    # for an on-demand stats line. An unprivileged background job polls the
+    # output file size every ${progress_interval} seconds for automatic
+    # progress; no signal permissions are needed for that.
+    local start_ts
+    start_ts=$(date +%s)
+
+    _progress_monitor "${progress_interval}" "${total_bytes}" \
+                      "${output}" "${start_ts}" &
+    local monitor_pid=$!
+    # Ensure the monitor is always stopped when this function returns.
+    trap 'kill "${monitor_pid}" 2>/dev/null; wait "${monitor_pid}" 2>/dev/null' RETURN
+
+    sudo /bin/dd "${dd_args[@]}"
+    local dd_rc=$?
+
+    kill "${monitor_pid}" 2>/dev/null
+    wait "${monitor_pid}" 2>/dev/null
+    trap - RETURN
+
+    [[ "${dd_rc}" -ne 0 ]] && die "dd failed with exit code ${dd_rc}"
 
     # Post-capture validation
     if [[ ! -s "${output}" ]]; then
@@ -559,6 +607,10 @@ print_version() {
     fi
     echo "usb-explore ${ver}  image=${IMAGE_REF}"
 }
+
+# When sourced (e.g. by tests), skip argument parsing so only the
+# function definitions are loaded.
+[[ "${BASH_SOURCE[0]}" != "${0}" ]] && return 0
 
 SUBCOMMAND=""
 
