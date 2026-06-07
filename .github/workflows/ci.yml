@@ -1,0 +1,252 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, staging]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  IMAGE: 1121citrus/usb-explore
+
+jobs:
+
+  # --------------------------------------------------------------------------
+  # Stage 1: Lint
+  # --------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          config: .hadolint.yaml
+
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          severity: warning
+          additional_files: >-
+            src/usb-explore
+            src/container/entrypoint.sh
+            src/container/info.sh
+            src/container/dispatch.sh
+            src/container/drivers/ext.sh
+            src/container/drivers/xfs.sh
+            src/container/drivers/vfat.sh
+
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: '**/*.md'
+          config: .markdownlint.json
+
+  # --------------------------------------------------------------------------
+  # Stage 2: Build
+  # --------------------------------------------------------------------------
+  build:
+    name: Build
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive version
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [[ "${GITHUB_REF}" == refs/heads/staging ]]; then
+            VERSION="staging-$(date -u +%Y%m%d%H%M%S)"
+          elif [[ "${GITHUB_REF}" == refs/heads/main || \
+                  "${GITHUB_REF}" == refs/heads/master ]]; then
+            VERSION="edge"
+          elif [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            VERSION="pr-${{ github.event.number }}"
+          else
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (single-platform, load)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+
+      - name: Export image artifact
+        run: |
+          docker save "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}" \
+            | gzip > /tmp/image.tar.gz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: /tmp/image.tar.gz
+          retention-days: 1
+
+  # --------------------------------------------------------------------------
+  # Stage 3: Test
+  # --------------------------------------------------------------------------
+  test:
+    name: Test
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image
+          path: /tmp
+
+      - name: Load image
+        run: docker load < /tmp/image.tar.gz
+
+      - name: Generate test fixtures
+        run: bash fixtures/generate.sh
+
+      - name: Run BATS tests
+        run: |
+          docker run --rm \
+            -v "$PWD:$PWD" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -w "$PWD" \
+            -e "IMAGE=${{ env.IMAGE }}:${{ needs.build.outputs.version }}" \
+            bats/bats:1.13.0 \
+            bats \
+              test/01-build.bats \
+              test/02-image-structure.bats \
+              test/03-invocation.bats \
+              test/04-env-metadata.bats \
+              test/05-partition-discovery.bats \
+              test/06-subcommands.bats
+
+  # --------------------------------------------------------------------------
+  # Stage 4: Scan (parallel with test)
+  # --------------------------------------------------------------------------
+  scan:
+    name: Scan
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image
+          path: /tmp
+
+      - name: Load image
+        run: docker load < /tmp/image.tar.gz
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ needs.build.outputs.version }}
+          format: sarif
+          output: trivy-results.sarif
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+  # --------------------------------------------------------------------------
+  # Stage 5: Push (tag push and main/staging branches only)
+  # --------------------------------------------------------------------------
+  push:
+    name: Push
+    needs: [test, scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    if: >
+      github.event_name == 'push' &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/master' ||
+       github.ref == 'refs/heads/staging')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive push version and tags
+        id: tags
+        run: |
+          REF="${GITHUB_REF}"
+          if [[ "${REF}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+            TAGS="${{ env.IMAGE }}:${VER},${{ env.IMAGE }}:latest"
+          elif [[ "${REF}" == refs/heads/staging ]]; then
+            VER="staging-$(date -u +%Y%m%d%H%M%S)"
+            TAGS="${{ env.IMAGE }}:${VER},${{ env.IMAGE }}:staging"
+          else
+            VER="edge"
+            TAGS="${{ env.IMAGE }}:edge"
+          fi
+          echo "version=${VER}"   >> "${GITHUB_OUTPUT}"
+          echo "tags=${TAGS}"     >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push (multi-platform)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
