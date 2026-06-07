@@ -327,7 +327,7 @@ do_capture() {
     local dd_args=("if=${raw_device}" "of=${output}" "bs=4m")
     [[ "${no_sparse}" == false ]] && dd_args+=("conv=sparse")
 
-    log "Capturing ${raw_device} → ${output}"
+    log "Capturing ${raw_device} → $(realpath "${output}" 2>/dev/null || echo "${output}")"
     log "Sparse: $([[ "${no_sparse}" == false ]] && echo enabled || echo disabled)"
 
     if [[ "${dry_run}" == true ]]; then
