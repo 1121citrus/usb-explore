@@ -335,13 +335,22 @@ do_capture() {
         return 0
     fi
 
-    sudo /bin/dd "${dd_args[@]}" &
-    local dd_pid=$!
-    while kill -0 "${dd_pid}" 2>/dev/null; do
-        kill -INFO "${dd_pid}" 2>/dev/null || true
-        sleep "${progress_interval}"
-    done
-    wait "${dd_pid}"
+    # Run dd and the SIGINFO progress loop under a single sudo invocation.
+    # dd runs as root; an unprivileged monitoring loop cannot signal it
+    # (Operation not permitted). Running both under sudo means the
+    # monitoring shell and dd share the same uid and signals work.
+    local dd_args_q interval="${progress_interval}"
+    printf -v dd_args_q ' %q' "${dd_args[@]}"
+
+    sudo /bin/bash -c "
+        /bin/dd${dd_args_q} &
+        DD_PID=\$!
+        while kill -0 \$DD_PID 2>/dev/null; do
+            kill -INFO \$DD_PID 2>/dev/null || true
+            sleep ${interval}
+        done
+        wait \$DD_PID
+    "
 
     # Post-capture validation
     if [[ ! -s "${output}" ]]; then
