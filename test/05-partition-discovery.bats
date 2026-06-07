@@ -140,7 +140,9 @@ info_json() {
         "${IMAGE}" info
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"EFI"* ]]
-    [[ "${output}" == *"not mountable"* || "${output}" == *"excluded"* ]]
+    # EFI is excluded from auto-selection; message may say "excluded" or
+    # guide the user to -p for explicit mounting.
+    [[ "${output}" == *"EFI"* && ("${output}" == *"excluded"* || "${output}" == *"-p"*) ]]
 }
 
 @test "discovery: info (human) summary line mentions mountable count" {

@@ -37,30 +37,65 @@ gpt_type_name() {
         0657FD6D-A4AB-43C4-84E5-0933C84B4F4F) echo "Linux swap" ;;
         E6D6D379-F507-44C2-A23C-238F2A3DF928) echo "LVM physical volume" ;;
         0FC63DAF-8483-4772-8E79-3D69D8477DE4) echo "Linux filesystem" ;;
+        EBD0A0A2-B9E5-4433-87C0-68B6B72699C7) echo "Microsoft Basic Data" ;;
         *) echo "Unknown type" ;;
     esac
 }
 
 # classify_partition — set MOUNTABLE and MOUNTABLE_REASON globals.
-# Args: $1 = GPT type GUID or MBR hex type; $2 = blkid TYPE value
+# Args: $1 = GPT type GUID or MBR hex type; $2 = blkid TYPE value; $3 = attrs
 classify_partition() {
-    local type_id="${1^^}" fstype="${2}"
+    local type_id="${1^^}" fstype="${2}" attrs="${3:-}"
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
 
     case "${type_id}" in
-        C12A7328-*) MOUNTABLE=false; MOUNTABLE_REASON="EFI System Partition excluded"; return ;;
+        C12A7328-*) MOUNTABLE=false; MOUNTABLE_REASON="EFI System Partition (use -p N to mount explicitly)"; return ;;
         21686148-*) MOUNTABLE=false; MOUNTABLE_REASON="BIOS Boot Partition excluded"; return ;;
         0657FD6D-*) MOUNTABLE=false; MOUNTABLE_REASON="Linux swap excluded"; return ;;
         E6D6D379-*) MOUNTABLE=false; MOUNTABLE_REASON="LVM physical volume excluded"; return ;;
         00|82|8E|EE) MOUNTABLE=false; MOUNTABLE_REASON="partition type excluded (${type_id})"; return ;;
     esac
 
+    # xorriso hybrid ISO disks use Microsoft Basic Data (EBD0A0A2) with
+    # GPT attribute bit 60 (RequiredPartition) on both the main ISO data
+    # region and the BIOS boot gap. These are not standalone filesystems;
+    # the ISO9660 structure spans the whole disk starting at sector 0.
+    if [[ "${type_id}" == EBD0A0A2-* && "${attrs}" == *"GUID:60"* ]]; then
+        MOUNTABLE=false
+        MOUNTABLE_REASON="ISO data region (ISO9660 spans whole disk, not this partition)"
+        return
+    fi
+
     case "${fstype}" in
         squashfs) MOUNTABLE=false; MOUNTABLE_REASON="squashfs not supported in this version"; return ;;
         btrfs)    MOUNTABLE=false; MOUNTABLE_REASON="btrfs not supported in this version"; return ;;
         swap|"")  MOUNTABLE=false; MOUNTABLE_REASON="no recognised filesystem"; return ;;
     esac
+}
+
+# disk_level_fstype — detect filesystem spanning the whole disk image.
+# ISO9660 hybrid disks have the PVD at sector 16 (byte 8192), before any
+# GPT partition starts. blkid --probe on the disk as a whole may miss it
+# (GPT takes priority), so also check for the CD001 magic directly.
+# Returns: 0; writes type to stdout (empty if not detected)
+disk_level_fstype() {
+    local t
+    t=$(blkid --probe -o value -s TYPE /disk.img 2>/dev/null || true)
+    if [[ -n "${t}" ]]; then
+        echo "${t}"; return
+    fi
+    # ISO9660 Primary Volume Descriptor: magic "CD001" at byte offset
+    # 32769 (sector 16, byte 1 within the descriptor).
+    if dd if=/disk.img bs=1 skip=32769 count=5 2>/dev/null \
+            | grep -qP "^CD001"; then
+        echo "iso9660"; return
+    fi
+    # Check for Joliet/ISO9660 using a broader match (no perl regex)
+    if dd if=/disk.img bs=2048 skip=16 count=1 2>/dev/null \
+            | grep -q "CD001"; then
+        echo "iso9660"
+    fi
 }
 
 # probe_partition — detect filesystem type using blkid --probe with byte offset.
@@ -103,6 +138,8 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
     START=$(echo "${PART_JSON}" | jq -r '.start')
     SIZE_S=$(echo "${PART_JSON}"| jq -r '.size')
     TYPE=$(echo "${PART_JSON}"  | jq -r '.type // "00"')
+    ATTRS=$(echo "${PART_JSON}" | jq -r '.attrs // ""')
+    PNAME=$(echo "${PART_JSON}" | jq -r '.name  // ""')
 
     SIZE_BYTES=$(( SIZE_S * SECTOR_SIZE ))
     SIZE_HUMAN=$(bytes_human "${SIZE_BYTES}")
@@ -115,6 +152,12 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
     UUID=$(probe_partition "${OFFSET}" "${SIZE_BYTES}" "UUID")
     UUID_SHORT="${UUID:0:8}"
 
+    # Use the partition name (from xorriso etc.) as the label when blkid
+    # finds none and the partition name is meaningful.
+    if [[ -z "${FS_LABEL}" && -n "${PNAME}" ]]; then
+        FS_LABEL="${PNAME}"
+    fi
+
     if [[ "${LABEL}" == "gpt" ]]; then
         TYPE_NAME=$(gpt_type_name "${TYPE}")
     else
@@ -123,7 +166,7 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
 
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
-    classify_partition "${TYPE}" "${FSTYPE}"
+    classify_partition "${TYPE}" "${FSTYPE}" "${ATTRS}"
 
     RECORD=$(jq -n \
         --argjson num    "${PART_NUM}" \
@@ -175,6 +218,14 @@ FULL_JSON=$(jq -n \
         partitions:  $parts
     }')
 
+# Detect disk-level filesystem (e.g. ISO9660 on a hybrid ISO/GPT disk).
+DISK_FSTYPE=$(disk_level_fstype)
+
+if [[ -n "${DISK_FSTYPE}" ]]; then
+    FULL_JSON=$(echo "${FULL_JSON}" \
+        | jq --arg df "${DISK_FSTYPE}" '. + {disk_filesystem: $df}')
+fi
+
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
@@ -187,7 +238,12 @@ fi
 MOUNTABLE_COUNT=$(echo "${FULL_JSON}" \
     | jq '[.partitions[] | select(.mountable == true)] | length')
 
-printf "Image:  /disk.img  (%s)\n" "${IMAGE_SIZE_HUMAN}"
+if [[ -n "${DISK_FSTYPE}" ]]; then
+    printf "Image:  /disk.img  (%s)  [disk-level: %s]\n" \
+        "${IMAGE_SIZE_HUMAN}" "${DISK_FSTYPE}"
+else
+    printf "Image:  /disk.img  (%s)\n" "${IMAGE_SIZE_HUMAN}"
+fi
 printf "Scheme: %s\n\n" "${LABEL^^}"
 printf "  %-3s  %-10s  %-10s  %-22s  %-10s  %s\n" \
     "#" "Filesystem" "Size" "Label" "UUID" "Notes"

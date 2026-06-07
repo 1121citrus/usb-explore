@@ -179,8 +179,11 @@ do_copy() {
 
 # Args: command and arguments, with leading / paths already rewritten to
 # /mnt/part/<path> by the host wrapper before being passed in.
+# CWD is set to /mnt/part so that bare commands like 'ls' or 'find .'
+# operate on the partition root rather than the container root.
 do_run() {
     mount_partition
+    cd /mnt/part
     exec "$@"
 }
 

@@ -230,16 +230,23 @@ run_container() {
     docker "${docker_args[@]}"
 }
 
-# set_tty_flags — populate TTY_FLAGS array with -i and optionally -t.
-# Allocates -t only when both stdin and stdout are terminals so the tool
-# works correctly in pipelines and CI environments.
+# set_tty_flags — populate TTY_FLAGS array with -i -t when interactive,
+# or nothing when stdout is piped/redirected.
+#
+# With just -i and no -t, Docker attaches stdin but the container's stdout
+# can block waiting for stdin EOF before flushing — piped output never
+# arrives at the reader. Using -i -t only when both fds are terminals, and
+# no flags otherwise, lets Docker forward stdout directly to the pipe.
 # Args: none; sets global TTY_FLAGS
 set_tty_flags() {
-    TTY_FLAGS=(-i)
-    [[ -t 0 && -t 1 ]] && TTY_FLAGS+=(-t)
+    if [[ -t 0 && -t 1 ]]; then
+        TTY_FLAGS=(-i -t)
+    else
+        TTY_FLAGS=()
+    fi
 }
 
-TTY_FLAGS=(-i)   # default; updated by set_tty_flags before each container call
+TTY_FLAGS=()   # default; updated by set_tty_flags before each container call
 
 # _progress_monitor — print a progress line to stderr every INTERVAL seconds.
 # Reads the output file size with /usr/bin/stat (BSD stat, explicit path to
@@ -502,6 +509,9 @@ do_copy() {
     local src="" dest=""
     while [[ $# -gt 0 ]]; do
         case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
             -*) die "Unknown copy option: ${1}" ;;
             *)
                 if [[ -z "${src}" ]]; then
@@ -543,10 +553,17 @@ do_copy() {
 # ---------------------------------------------------------------------------
 
 do_run() {
-    # Consume any flags before the first non-flag or --
+    # Accept -p/--partition here so 'usb-explore run -p N -- cmd' works
+    # alongside the global form 'usb-explore -p N run -- cmd'.
+    # -- ends option parsing; anything after it is the command to exec.
     while [[ $# -gt 0 && "${1}" != "--" ]]; do
         case "${1}" in
-            -*) die "Unknown run option: ${1} (use -- to separate flags from command)" ;;
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown run option: ${1}
+       Pass -p before the subcommand:  usb-explore -p N run -- <cmd>
+       or between subcommand and --:   usb-explore run -p N -- <cmd>" ;;
             *) break ;;
         esac
         shift
@@ -584,6 +601,9 @@ do_diff() {
     local img_path="" ref_path=""
     while [[ $# -gt 0 ]]; do
         case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
             -*) die "Unknown diff option: ${1}" ;;
             *)
                 if [[ -z "${img_path}" ]]; then
