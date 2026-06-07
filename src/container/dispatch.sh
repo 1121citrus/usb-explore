@@ -15,6 +15,12 @@ shift
 DRIVER_DIR="/usr/local/lib/usb-explore/drivers"
 # shellcheck source=/dev/null
 for _drv in "${DRIVER_DIR}"/*.sh; do source "${_drv}"; done
+# Driver registry: each entry must have <name>_detect, <name>_mount, and
+# <name>_unmount functions defined in src/container/drivers/<name>.sh, plus
+# the corresponding package added to the Dockerfile.
+# To add a driver: append its name here and follow CONTRIBUTING.md.
+# Known candidates: squashfs (uses unsquashfs extraction, not kernel mount),
+#                   btrfs (needs btrfs-progs and btrfs kernel module).
 FS_DRIVERS=(ext xfs vfat)
 
 # ---------------------------------------------------------------------------
