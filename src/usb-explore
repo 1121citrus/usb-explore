@@ -321,21 +321,21 @@ do_capture() {
         fi
     fi
 
-    # Build the dd argument list
-    # bs=4M: uppercase M is accepted by both BSD dd (macOS) and GNU dd
-    # (Homebrew coreutils). Lowercase 4m is BSD-only.
-    local dd_args=("if=${raw_device}" "of=${output}" "bs=4M")
+    # Use /bin/dd explicitly: this tool is macOS-only and requires BSD dd
+    # for conv=sparse and SIGINFO progress. Augmented PATH toolsets (pkgin,
+    # Homebrew) may put GNU dd first; that breaks both features.
+    local dd_args=("if=${raw_device}" "of=${output}" "bs=4m")
     [[ "${no_sparse}" == false ]] && dd_args+=("conv=sparse")
 
     log "Capturing ${raw_device} → ${output}"
     log "Sparse: $([[ "${no_sparse}" == false ]] && echo enabled || echo disabled)"
 
     if [[ "${dry_run}" == true ]]; then
-        echo "[dry-run] sudo dd ${dd_args[*]}"
+        echo "[dry-run] sudo /bin/dd ${dd_args[*]}"
         return 0
     fi
 
-    sudo dd "${dd_args[@]}" &
+    sudo /bin/dd "${dd_args[@]}" &
     local dd_pid=$!
     while kill -0 "${dd_pid}" 2>/dev/null; do
         kill -INFO "${dd_pid}" 2>/dev/null || true
