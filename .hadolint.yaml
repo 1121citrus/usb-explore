@@ -1,5 +1,7 @@
 failure-threshold: warning
 ignore:
+  # DL3006: FROM uses BASE_IMAGE ARG (defaults to ubuntu:24.04 — explicitly tagged)
+  - DL3006
   # DL3008: pin apt versions — acceptable for a dev tool with CVE scanning
   - DL3008
   # DL3009: delete apt lists — handled in the same RUN layer

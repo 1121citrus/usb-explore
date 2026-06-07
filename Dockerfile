@@ -7,9 +7,6 @@ ARG BUILD_DATE=unknown
 ARG AUTHORS="1121 Citrus"
 ARG LICENSE=AGPL-3.0-or-later
 
-# hadolint ignore=DL3006
-# BASE_IMAGE defaults to ubuntu:24.04 (explicitly tagged); the ARG pattern
-# is intentional to allow platform overrides at build time.
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
