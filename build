@@ -636,7 +636,9 @@ if [[ "${TEST}" == "true" ]]; then
                 test/03-invocation.bats \
                 test/04-env-metadata.bats \
                 test/05-partition-discovery.bats \
-                test/06-subcommands.bats"
+                test/06-subcommands.bats \
+                test/07-capture.bats \
+                test/08-cli.bats"
     fi
     write_build_report
 fi

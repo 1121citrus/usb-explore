@@ -624,7 +624,7 @@ do_diff() {
 # ---------------------------------------------------------------------------
 
 usage() {
-    sed -n '/^# SYNOPSIS/,/^# EXAMPLES/{ /^#$/d; s/^# //; p }' \
+    awk '/^# SYNOPSIS/{f=1;next} /^# EXAMPLES/{exit} f && !/^#$/{sub(/^# ?/,""); print}' \
         "${BASH_SOURCE[0]}"
 }
 
