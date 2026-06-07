@@ -7,6 +7,7 @@ ARG BUILD_DATE=unknown
 ARG AUTHORS="1121 Citrus"
 ARG LICENSE=AGPL-3.0-or-later
 
+# hadolint ignore=DL3006
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
