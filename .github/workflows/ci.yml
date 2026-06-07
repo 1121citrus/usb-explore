@@ -32,6 +32,10 @@ jobs:
         with:
           dockerfile: Dockerfile
           config: .hadolint.yaml
+          # Explicit ignore and threshold: hadolint-action defaults to
+          # failure-threshold=info, overriding .hadolint.yaml settings.
+          failure-threshold: warning
+          ignore: DL3006 DL3008 DL3009
 
       - name: shellcheck
         uses: ludeeus/action-shellcheck@2.0.0
@@ -45,6 +49,7 @@ jobs:
             src/container/drivers/ext.sh
             src/container/drivers/xfs.sh
             src/container/drivers/vfat.sh
+            src/container/drivers/iso9660.sh
 
       - name: markdownlint
         uses: DavidAnson/markdownlint-cli2-action@v19

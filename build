@@ -571,7 +571,8 @@ if [[ "${LINT}" == "true" ]]; then
             /src/src/container/dispatch.sh \
             /src/src/container/drivers/ext.sh \
             /src/src/container/drivers/xfs.sh \
-            /src/src/container/drivers/vfat.sh)
+            /src/src/container/drivers/vfat.sh \
+            /src/src/container/drivers/iso9660.sh)
 
     echo "    markdownlint **/*.md" >&2
     run docker run --rm \
