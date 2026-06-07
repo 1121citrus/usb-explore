@@ -43,28 +43,38 @@ gpt_type_name() {
 }
 
 # classify_partition — set MOUNTABLE and MOUNTABLE_REASON globals.
-# Args: $1 = GPT type GUID or MBR hex type; $2 = blkid TYPE value; $3 = attrs
+# Args: $1 = GPT type GUID or MBR hex type; $2 = blkid TYPE value;
+#       $3 = attrs string from sfdisk; $4 = partition size in bytes
 classify_partition() {
-    local type_id="${1^^}" fstype="${2}" attrs="${3:-}"
+    local type_id="${1^^}" fstype="${2}" attrs="${3:-}" size_bytes="${4:-0}"
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
 
     case "${type_id}" in
-        C12A7328-*) MOUNTABLE=false; MOUNTABLE_REASON="EFI System Partition (use -p N to mount explicitly)"; return ;;
+        # EFI is NOT excluded: the vfat driver mounts it fine. It is excluded
+        # only from AUTO-SELECTION (resolved via the mountable count in the
+        # summary line), but explicitly selecting it with -p N always works.
         21686148-*) MOUNTABLE=false; MOUNTABLE_REASON="BIOS Boot Partition excluded"; return ;;
         0657FD6D-*) MOUNTABLE=false; MOUNTABLE_REASON="Linux swap excluded"; return ;;
         E6D6D379-*) MOUNTABLE=false; MOUNTABLE_REASON="LVM physical volume excluded"; return ;;
         00|82|8E|EE) MOUNTABLE=false; MOUNTABLE_REASON="partition type excluded (${type_id})"; return ;;
     esac
 
-    # xorriso hybrid ISO disks use Microsoft Basic Data (EBD0A0A2) with
-    # GPT attribute bit 60 (RequiredPartition) on both the main ISO data
-    # region and the BIOS boot gap. These are not standalone filesystems;
-    # the ISO9660 structure spans the whole disk starting at sector 0.
+    # xorriso hybrid ISO disks: Microsoft Basic Data (EBD0A0A2) + GUID:60
+    # (RequiredPartition) on both the main ISO region and the BIOS boot gap.
+    # Large regions (≥1 MB) contain the ISO9660 content and can be mounted
+    # via the iso9660 driver which mounts the whole disk from byte 0.
+    # Small regions (e.g. 300 KB GRUB core.img) are raw binary, not mountable.
     if [[ "${type_id}" == EBD0A0A2-* && "${attrs}" == *"GUID:60"* ]]; then
-        MOUNTABLE=false
-        MOUNTABLE_REASON="ISO data region (ISO9660 spans whole disk, not this partition)"
-        return
+        if [[ "${size_bytes}" -ge 1048576 ]]; then
+            # fstype is set to iso9660 by the caller when DISK_FSTYPE is iso9660
+            MOUNTABLE=true
+            return
+        else
+            MOUNTABLE=false
+            MOUNTABLE_REASON="BIOS boot sector — raw binary, no filesystem"
+            return
+        fi
     fi
 
     case "${fstype}" in
@@ -123,6 +133,10 @@ IMAGE_SIZE_SECTORS=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.lastlba + 1'
 IMAGE_SIZE_BYTES=$(( IMAGE_SIZE_SECTORS * SECTOR_SIZE ))
 IMAGE_SIZE_HUMAN=$(bytes_human "${IMAGE_SIZE_BYTES}")
 
+# Detect disk-level filesystem before the partition loop so that ISO data
+# regions can inherit the disk fstype (e.g. iso9660) during classification.
+DISK_FSTYPE=$(disk_level_fstype)
+
 # ---------------------------------------------------------------------------
 # Build partition records
 # ---------------------------------------------------------------------------
@@ -152,8 +166,14 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
     UUID=$(probe_partition "${OFFSET}" "${SIZE_BYTES}" "UUID")
     UUID_SHORT="${UUID:0:8}"
 
-    # Use the partition name (from xorriso etc.) as the label when blkid
-    # finds none and the partition name is meaningful.
+    # ISO data regions (EBD0A0A2 + GUID:60) have no partition-level filesystem;
+    # the ISO9660 structure starts at disk byte 0, before the partition. Inherit
+    # the disk-level fstype so classify_partition can make them mountable.
+    if [[ -z "${FSTYPE}" && "${ATTRS}" == *"GUID:60"* && -n "${DISK_FSTYPE}" ]]; then
+        FSTYPE="${DISK_FSTYPE}"
+    fi
+
+    # Use partition name as label fallback (xorriso sets Gap0, Gap1 etc.)
     if [[ -z "${FS_LABEL}" && -n "${PNAME}" ]]; then
         FS_LABEL="${PNAME}"
     fi
@@ -166,7 +186,7 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
 
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
-    classify_partition "${TYPE}" "${FSTYPE}" "${ATTRS}"
+    classify_partition "${TYPE}" "${FSTYPE}" "${ATTRS}" "${SIZE_BYTES}"
 
     RECORD=$(jq -n \
         --argjson num    "${PART_NUM}" \
@@ -218,9 +238,7 @@ FULL_JSON=$(jq -n \
         partitions:  $parts
     }')
 
-# Detect disk-level filesystem (e.g. ISO9660 on a hybrid ISO/GPT disk).
-DISK_FSTYPE=$(disk_level_fstype)
-
+# DISK_FSTYPE was already set before the partition loop (see above).
 if [[ -n "${DISK_FSTYPE}" ]]; then
     FULL_JSON=$(echo "${FULL_JSON}" \
         | jq --arg df "${DISK_FSTYPE}" '. + {disk_filesystem: $df}')

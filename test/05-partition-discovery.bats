@@ -34,20 +34,24 @@ info_json() {
     [ "${count}" -eq 2 ]
 }
 
-@test "discovery: single-ext4.img has 1 mountable partition" {
+@test "discovery: single-ext4.img has 2 mountable partitions (EFI vfat + ext4)" {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     local json count
     json=$(info_json single-ext4.img)
     count=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)] | length')
-    [ "${count}" -eq 1 ]
+    [ "${count}" -eq 2 ]
 }
 
-@test "discovery: single-ext4.img partition 1 (EFI) is not mountable" {
+@test "discovery: single-ext4.img partition 1 (EFI vfat) is mountable" {
+    # EFI is no longer excluded: the vfat driver mounts it fine.
+    # It is excluded from AUTO-SELECTION (requires -p N) but IS mountable.
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    local json mountable
+    local json mountable fstype
     json=$(info_json single-ext4.img)
     mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .mountable')
-    [ "${mountable}" = "false" ]
+    fstype=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .fstype')
+    [ "${mountable}" = "true" ]
+    [ "${fstype}" = "vfat" ]
 }
 
 @test "discovery: single-ext4.img partition 2 is mountable ext4" {
@@ -87,23 +91,25 @@ info_json() {
 # dual-ext4.img
 # ---------------------------------------------------------------------------
 
-@test "discovery: dual-ext4.img has 2 mountable partitions" {
+@test "discovery: dual-ext4.img has 3 mountable partitions (EFI vfat + 2 ext4)" {
     [[ -f "${FIXTURES}/dual-ext4.img" ]] || skip "fixture not generated"
     local json count
     json=$(info_json dual-ext4.img)
     count=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)] | length')
-    [ "${count}" -eq 2 ]
+    [ "${count}" -eq 3 ]
 }
 
 # ---------------------------------------------------------------------------
 # xfs.img
 # ---------------------------------------------------------------------------
 
-@test "discovery: xfs.img mountable partition is xfs" {
+@test "discovery: xfs.img has an xfs mountable partition" {
+    # xfs.img has EFI (vfat, mountable) + xfs (mountable). Verify xfs is present.
     [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture not generated"
     local json fstype
     json=$(info_json xfs.img)
-    fstype=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)][0].fstype')
+    fstype=$(jq_from_json "${json}" \
+        '[.partitions[] | select(.mountable == true and .fstype == "xfs")][0].fstype')
     [ "${fstype}" = "xfs" ]
 }
 
@@ -133,23 +139,23 @@ info_json() {
 # Human table output
 # ---------------------------------------------------------------------------
 
-@test "discovery: info (human) shows EFI as not mountable" {
+@test "discovery: info (human) shows EFI partition as mountable" {
+    # EFI is no longer excluded: vfat driver handles it. It shows [mountable].
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     run docker run --rm --privileged \
         -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
         "${IMAGE}" info
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"EFI"* ]]
-    # EFI is excluded from auto-selection; message may say "excluded" or
-    # guide the user to -p for explicit mounting.
-    [[ "${output}" == *"EFI"* && ("${output}" == *"excluded"* || "${output}" == *"-p"*) ]]
+    [[ "${output}" == *"vfat"* ]]
+    [[ "${output}" == *"mountable"* ]]
 }
 
-@test "discovery: info (human) summary line mentions mountable count" {
+@test "discovery: info (human) summary line shows 2 mountable partitions" {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     run docker run --rm --privileged \
         -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
         "${IMAGE}" info
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"1 mountable"* ]]
+    [[ "${output}" == *"2 mountable"* ]]
 }

@@ -128,7 +128,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     # Allow any exit code: Docker may be unavailable (3), image missing (4),
     # or a downstream tool may be absent (127). None of these is exit 2
     # (usage error = unknown subcommand).
-    run -127 bash "${SCRIPT}" shell
+    run bash "${SCRIPT}" shell
     [ "${status}" -ne 2 ]
 }
 

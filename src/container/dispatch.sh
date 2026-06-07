@@ -21,7 +21,9 @@ for _drv in "${DRIVER_DIR}"/*.sh; do source "${_drv}"; done
 # To add a driver: append its name here and follow CONTRIBUTING.md.
 # Known candidates: squashfs (uses unsquashfs extraction, not kernel mount),
 #                   btrfs (needs btrfs-progs and btrfs kernel module).
-FS_DRIVERS=(ext xfs vfat)
+# iso9660 must come AFTER vfat: it activates only for partitions with NO
+# partition-level filesystem, so vfat (EFI) is handled first and wins.
+FS_DRIVERS=(ext xfs vfat iso9660)
 
 # ---------------------------------------------------------------------------
 # Loop device tracking (populated by attach_partition)
@@ -103,6 +105,35 @@ attach_partition() {
 # Reads USB_PARTITION from the environment.
 # Returns: 0 on success; exits 5 on unsupported or unrecognised filesystem
 mount_partition() {
+    # Pre-check: for xorriso ISO data regions (GPT attribute GUID:60), the
+    # iso9660 filesystem starts at disk byte 0 (before any partition offset).
+    # Creating a partition loop device and THEN a full-disk loop for the same
+    # file causes a kernel "overlapping loop device" error. Detect this case
+    # first and mount /disk.img directly without a partition loop.
+    local sfdisk_json part_attrs part_idx
+    sfdisk_json=$(sfdisk --json /disk.img 2>/dev/null)
+    part_idx=$(( USB_PARTITION - 1 ))
+    part_attrs=$(echo "${sfdisk_json}" | jq -r ".partitiontable.partitions[${part_idx}].attrs // \"\"")
+
+    if [[ "${part_attrs}" == *"GUID:60"* ]]; then
+        # Detach any stale loop devices pointing at /disk.img. Loop devices
+        # persist across container exits when exec() replaces bash (EXIT trap
+        # never fires). A stale partition-offset loop overlaps the full-disk
+        # range and causes 'overlapping loop device exists' on the iso9660 mount.
+        while IFS= read -r _stale; do
+            [[ -n "${_stale}" ]] && losetup --detach "${_stale}" 2>/dev/null || true
+        done < <(losetup --associated /disk.img 2>/dev/null | awk -F: '{print $1}')
+
+        # Check for ISO9660 magic at sector 16 (byte 32769)
+        if dd if=/disk.img bs=2048 skip=16 count=1 2>/dev/null | grep -q "CD001"; then
+            mount -o ro -t iso9660 /disk.img /mnt/part
+            return 0
+        fi
+        echo "error: partition ${USB_PARTITION} is an ISO data region but" >&2
+        echo "       the disk does not contain a readable ISO9660 filesystem." >&2
+        exit 5
+    fi
+
     attach_partition "${USB_PARTITION:?USB_PARTITION is not set}"
 
     local fstype
