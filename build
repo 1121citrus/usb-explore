@@ -1,429 +1,926 @@
 #!/usr/bin/env bash
-# Local CI equivalent for usb-explore.
-# Mirrors the GitHub Actions pipeline exactly.
-# Usage: ./build [options]  (run with --help for full option list)
+
+# build — local CI equivalent for usb-explore.
+#
+# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# SYNOPSIS
+#   build [--push] [--version VERSION]
+#         [--platform PLATFORMS] [--registry REGISTRY]
+#         [--no-sbom] [--no-provenance]
+#         [--no-lint] [--no-test]
+#         [--run-staging]
+#         [--no-scan]
+#         [--advise [ADVISEMENTS]] [--advice [ADVISEMENTS]] [--no-advise]
+#         [--cache CACHE_RULES]
+#         [--dry-run] [--help]
+#
+# OPTIONS
+#   --push              Push the image to the registry after a successful build.
+#                       Omitting this flag builds locally only (the default).
+#   --version VERSION   Tag the image with this version string, e.g. "1.2.3".
+#                       When omitted the image is tagged "dev-<git-short-sha>"
+#                       so that local builds are never confused with released
+#                       artifacts.
+#   --platform PLATFORMS
+#                       Comma-separated list of target platforms for --push.
+#                       Default: linux/amd64,linux/arm64
+#   --registry REGISTRY Docker Hub username / registry prefix.
+#                       Default: 1121citrus
+#   --no-sbom           Skip generating an SBOM attestation (push only).
+#   --no-provenance     Skip generating a provenance attestation (push only).
+#   --no-lint           Skip hadolint Dockerfile check and shellcheck.
+#   --no-test           Skip running the test suite.
+#   --run-staging       Run test/staging after Stage 3 test. Default: off.
+#   --no-scan           Skip all gating vulnerability scans (Trivy, Grype,
+#                       Scout). Also skips advisory scans by default; pass
+#                       --advise after --no-scan to keep them.
+#   --advise [ADVISEMENTS]
+#                       Run advisory scans. Comma-delimited list:
+#                       'churn', 'coverage', 'dive', 'metrics', 'security',
+#                       'all', 'none', or any combination.
+#                       'all' selects every available advisement.
+#                       'none' disables all (equivalent to --no-advise).
+#                       Default with no list given: 'all'.
+#                       Advisory scans are off by default.
+#   --advice [ADVISEMENTS]
+#                       Synonym for --advise.
+#   --no-advise         Disable all advisory scans (equivalent to
+#                       --advise none).
+#   --cache CACHE_RULES One-run cache controls for scanner DBs.
+#                       Rule format: 'reset=<targets>;skip-update=<targets>'
+#                       Targets: trivy, grype, all (comma-delimited)
+#                       Examples:
+#                         --cache 'reset=all'
+#                         --cache 'skip-update=grype'
+#                         --cache 'reset=grype;skip-update=trivy'
+#   --dry-run           Print each command without executing it.
+#   --help              Print this message and exit.
+#
+# ENVIRONMENT
+#   The following env-var overrides take precedence over the defaults above but
+#   are themselves overridden by the matching CLI flag:
+#     BUILD_VERSION, BUILD_PUSH, BUILD_PLATFORM, BUILD_REGISTRY
+#     BUILD_LINT, BUILD_TEST, BUILD_SCAN, BUILD_SCAN_GRYPE, BUILD_SCAN_SCOUT
+#     BUILD_REPORT_JSON
+#     BUILD_TEST_SUMMARY_JSON
+#     BUILD_RUN_STAGING
+#     BUILD_STAGING_SUMMARY_JSON
+#   BUILD_CACHE_WARN_DAYS
+#                       Warn when the Trivy or Grype DB is older than this
+#                       many days. Default: 1. Set to 0 to suppress.
+#
+# PREREQUISITES
+#   • docker with the buildx plugin (≥ 0.10)
+#   • For --push: docker login <registry> must already be authenticated, plus
+#     QEMU binfmt helpers for cross-platform builds:
+#       docker run --rm --privileged tonistiigi/binfmt --install all
+#
+# STAGES (run in order; each can be skipped with --no-<stage>)
+#   1.  Lint      — hadolint (Dockerfile) + shellcheck + markdownlint
+#   2.  Build     — single-platform --load into local Docker daemon
+#   3.  Test      — bats test suite
+#   3d. Staging   — optional integration harness (only with --run-staging)
+#   4.  Scan      — Trivy CRITICAL/HIGH image scan (gating)
+#   4b. Scan      — Grype full-severity scan (gating)
+#   4c. Scan      — Docker Scout CVE scan (gating)
+#   5.  Advise    — advisory scans (never block the build)
+#              a) Dive       — image layer analysis
+#              f) Metrics    — scc code-metrics summary
+#              g) Security   — graudit pattern scan
+#   6.  Push      — multi-platform rebuild + push (only with --push)
+#
+# EXAMPLES
+#   # Local dev cycle — lint, build, test, scan
+#   ./build
+#
+#   # Full scan including advisory
+#   ./build --advise all
+#
+#   # Release build — push version 1.2.3 and latest
+#   ./build --push --version 1.2.3
+#
+#   # Skip scanning during fast iteration
+#   ./build --no-scan
+#
+#   # Reset scanner DB caches for this run
+#   ./build --cache 'reset=all'
+#
+#   # Dry-run: just print each command
+#   ./build --dry-run
+#
+# HELP_ENDS_HERE
+
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# Defaults (all overridable via env vars or CLI flags)
+# Developer orientation
+#
+# This script is the local equivalent of the CI workflow. Run it before
+# pushing to verify that every quality gate passes. Each stage can be
+# skipped individually (see OPTIONS above).
+#
+# Scanner DB caches persist in Docker named volumes between runs. The first
+# run primes the cache from the internet; later runs skip the download.
+# Use --cache reset=all to force a fresh download before a release scan.
+#
+# --dry-run prints every command without executing it — useful for
+# understanding what a stage does before running it for the first time.
 # ---------------------------------------------------------------------------
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-VERSION="${BUILD_VERSION:-}"
-PUSH="${BUILD_PUSH:-false}"
-PLATFORM="${BUILD_PLATFORM:-}"
-REGISTRY="${BUILD_REGISTRY:-1121citrus}"
-IMAGE="${REGISTRY}/usb-explore"
-
-DO_LINT="${BUILD_LINT:-true}"
-DO_TEST="${BUILD_TEST:-true}"
-DO_SCAN="${BUILD_SCAN:-true}"
-DO_SCAN_GRYPE="${BUILD_SCAN_GRYPE:-true}"
-DO_SCAN_SCOUT="${BUILD_SCAN_SCOUT:-true}"
-DO_STAGING=false
-DO_SBOM=true
-DO_PROVENANCE=true
+# ---------------------------------------------------------------------------
+# Defaults — may be overridden by environment variables or CLI flags.
+# ---------------------------------------------------------------------------
+SCAN=${BUILD_SCAN:-true}
+SCAN_GRYPE=${BUILD_SCAN_GRYPE:-true}
+SCAN_SCOUT=${BUILD_SCAN_SCOUT:-true}
+ADVISE_DIVE=false
+ADVISE_METRICS=false
+ADVISE_SECURITY=false
+_ADVISE_EXPLICIT=false   # set true when --advise or --no-advise is passed
+CACHE_RESET_TRIVY=false
+CACHE_RESET_GRYPE=false
+CACHE_SKIP_UPDATE_TRIVY=false
+CACHE_SKIP_UPDATE_GRYPE=false
 DRY_RUN=false
-ADVISE=""
+BUILD_REPORT_JSON=${BUILD_REPORT_JSON:-}
+LINT=${BUILD_LINT:-true}
+PLATFORMS=${BUILD_PLATFORM:-linux/amd64,linux/arm64}
+PROVENANCE=true
+PUSH=${BUILD_PUSH:-false}
+REGISTRY=${BUILD_REGISTRY:-1121citrus}
+SBOM=true
+TEST=${BUILD_TEST:-true}
+TEST_SUMMARY_JSON=${BUILD_TEST_SUMMARY_JSON:-}
+RUN_STAGING=${BUILD_RUN_STAGING:-false}
+STAGING_SUMMARY_JSON=${BUILD_STAGING_SUMMARY_JSON:-}
+if [[ -n "${BUILD_REPORT_JSON}" && -z "${TEST_SUMMARY_JSON}" ]]; then TEST_SUMMARY_JSON="${BUILD_REPORT_JSON%.json}.test.json"; fi
+if [[ -n "${BUILD_REPORT_JSON}" && -z "${STAGING_SUMMARY_JSON}" ]]; then STAGING_SUMMARY_JSON="${BUILD_REPORT_JSON%.json}.staging.json"; fi
+VERSION=${BUILD_VERSION:-}
 
-TRIVY_CACHE_VOL="${IMAGE##*/}-trivy-cache"
-GRYPE_CACHE_VOL="${IMAGE##*/}-grype-cache"
+IMAGE_NAME=usb-explore
 
-CACHE_RESET=""
-CACHE_SKIP_UPDATE=""
+# Tool image references — edit these variables to update tool versions.
+DIVE_DOCKER_CLIENT_API=1.47
+DIVE_IMAGE=wagoodman/dive
+DIVE_TAG=v0.13.1
+GRYPE_IMAGE=anchore/grype
+GRYPE_TAG=v0.112.0
+HADOLINT_IMAGE=hadolint/hadolint
+HADOLINT_TAG=v2.14.0
+MARKDOWNLINT_IMAGE=ghcr.io/igorshubovych/markdownlint-cli
+MARKDOWNLINT_TAG=v0.48.0
+SCC_IMAGE=ghcr.io/boyter/scc
+SCC_TAG=v3.7.0
+SHELLCHECK_IMAGE=koalaman/shellcheck
+SHELLCHECK_TAG=v0.11.0
+TRIVY_IMAGE=aquasec/trivy
+TRIVY_TAG=0.70.0
+
+TRIVY_CACHE_VOLUME=usb-explore-trivy-cache
+GRYPE_CACHE_VOLUME=usb-explore-grype-cache
+GRYPE_DB_CACHE_DIR=/grype-db
 
 # ---------------------------------------------------------------------------
-# Colours
+# Helpers: cache control parsing
 # ---------------------------------------------------------------------------
+# set_cache_targets — set cache-control flags for the named scanner targets.
+# Called by parse_cache_rules for each key=value pair from --cache.
+# Args: $1=mode (reset|skip-update)  $2=targets_csv (trivy,grype,all)
+set_cache_targets() {
+    local mode="$1"
+    local targets_csv="$2"
+    local target
+    IFS=',' read -ra _cache_targets <<< "${targets_csv}"
 
-if [[ -t 1 ]]; then
-    RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m'
-    CYAN='\033[0;36m' BOLD='\033[1m' RESET='\033[0m'
-else
-    RED='' GREEN='' YELLOW='' CYAN='' BOLD='' RESET=''
-fi
+    for target in "${_cache_targets[@]}"; do
+        case "${target}" in
+            trivy)
+                if [[ "${mode}" == "reset" ]]; then
+                    CACHE_RESET_TRIVY=true
+                elif [[ "${mode}" == "skip-update" ]]; then
+                    CACHE_SKIP_UPDATE_TRIVY=true
+                fi
+                ;;
+            grype)
+                if [[ "${mode}" == "reset" ]]; then
+                    CACHE_RESET_GRYPE=true
+                elif [[ "${mode}" == "skip-update" ]]; then
+                    CACHE_SKIP_UPDATE_GRYPE=true
+                fi
+                ;;
+            all)
+                if [[ "${mode}" == "reset" ]]; then
+                    CACHE_RESET_TRIVY=true
+                    CACHE_RESET_GRYPE=true
+                elif [[ "${mode}" == "skip-update" ]]; then
+                    CACHE_SKIP_UPDATE_TRIVY=true
+                    CACHE_SKIP_UPDATE_GRYPE=true
+                fi
+                ;;
+            *)
+                echo "Unknown cache target: ${target}" >&2
+                exit 1
+                ;;
+        esac
+    done
+}
 
-log()   { echo -e "${CYAN}==>${RESET} ${BOLD}${*}${RESET}"; }
-ok()    { echo -e "${GREEN}  ✓${RESET} ${*}"; }
-warn()  { echo -e "${YELLOW}  !${RESET} ${*}"; }
-err()   { echo -e "${RED}  ✗${RESET} ${*}" >&2; }
-die()   { err "${*}"; exit 1; }
+# parse_cache_rules — parse the --cache flag value and dispatch to
+# set_cache_targets.  Accepts semicolon-separated key=value pairs
+# (e.g. "reset=trivy;skip-update=grype").  Exits 1 on malformed input.
+# Args: $1=rules (semicolon-separated string)
+parse_cache_rules() {
+    local rules="$1"
+    local entry
+    local key
+    local value
+    IFS=';' read -ra _cache_rules <<< "${rules}"
+
+    for entry in "${_cache_rules[@]}"; do
+        key="${entry%%=*}"
+        value="${entry#*=}"
+        key="${key//[[:space:]]/}"
+        value="${value//[[:space:]]/}"
+        key="${key,,}"
+        value="${value,,}"
+
+        if [[ -z "${key}" && -z "${value}" ]]; then
+            continue
+        fi
+
+        if [[ "${entry}" != *=* || -z "${key}" || -z "${value}" ]]; then
+            echo "Invalid --cache rule: ${entry}" >&2
+            exit 1
+        fi
+
+        case "${key}" in
+            reset|skip-update)
+                set_cache_targets "${key}" "${value}"
+                ;;
+            *)
+                echo "Unknown --cache rule key: ${key}" >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# volume_has_file — return 0 if file_path exists inside a Docker volume.
+# Runs an Alpine container to perform the check so it is host-filesystem-
+# agnostic.  Always returns 1 in dry-run mode (safe-fail).
+# Args: $1=volume_name  $2=file_path (absolute path inside the volume)
+volume_has_file() {
+    local volume_name="$1"
+    local file_path="$2"
+
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        return 1
+    fi
+
+    docker run --rm \
+        -v "${volume_name}:/cache" \
+        alpine:3.20 \
+        sh -c "test -f \"${file_path}\""
+}
+
+# grype_db_ready — return 0 if the Grype vulnerability database is present
+# and valid inside the cache volume.  Runs `grype db status` inside a
+# container so it uses the same paths as the actual scan.  Always returns 1
+# in dry-run mode (safe-fail).
+# Args: $1=volume_name
+grype_db_ready() {
+    local volume_name="$1"
+
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        return 1
+    fi
+
+    docker run --rm \
+        -e "GRYPE_DB_CACHE_DIR=${GRYPE_DB_CACHE_DIR}" \
+        -v "${volume_name}:${GRYPE_DB_CACHE_DIR}" \
+        "${GRYPE_IMAGE}:${GRYPE_TAG}" db status >/dev/null 2>&1
+}
+
+# reset_cache_db — wipe and recreate a Docker volume used as a scanner DB
+# cache (Trivy or Grype).  Runs Alpine inside a container so the operation
+# is cross-platform and independent of host filesystem permissions.
+# Args: $1=volume_name
+reset_cache_db() {
+    local volume_name="$1"
+    # Reset the volume by removing all contents and recreating the directory.
+    run docker run --rm \
+        -v "${volume_name}:/cache" \
+        alpine:3.21 \
+        sh -c "rm -rf /cache/* && mkdir -p /cache"
+}
 
 # ---------------------------------------------------------------------------
-# run() — execute or print (dry-run)
+# Helper: execute a command or print it for --dry-run.
 # ---------------------------------------------------------------------------
-
 run() {
-    if [[ "${DRY_RUN}" == true ]]; then
-        echo "[dry-run] $*"
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY RUN]" "$@" >&2
     else
         "$@"
+    fi
+}
+
+# Run a command with a timeout (no external 'timeout' binary required).
+# Backgrounds the command, starts a watchdog that kills it after SECONDS,
+# then waits.  In --dry-run mode just prints the command.
+# Usage: _timed SECONDS COMMAND [ARGS...]
+_timed() {
+    local secs="$1"; shift
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY RUN] (${secs}s timeout)" "$@" >&2
+        return 0
+    fi
+    "$@" &
+    local _pid=$!
+    ( sleep "${secs}" && kill "${_pid}" 2>/dev/null ) &
+    local _watcher=$!
+    wait "${_pid}" 2>/dev/null; local _rc=$?
+    kill "${_watcher}" 2>/dev/null
+    wait "${_watcher}" 2>/dev/null || true
+    return "${_rc}"
+}
+
+# Build report helper: writes optional aggregate JSON report combining
+# test and staging summary artifacts.
+write_build_report() {
+    if [[ -z "${BUILD_REPORT_JSON:-}" ]]; then
+        return 0
+    fi
+
+    local test_json="null"
+    local staging_json="null"
+
+    if [[ -n "${TEST_SUMMARY_JSON:-}" && -f "${TEST_SUMMARY_JSON}" ]]; then
+        test_json=$(cat "${TEST_SUMMARY_JSON}")
+    fi
+
+    if [[ -n "${STAGING_SUMMARY_JSON:-}" && -f "${STAGING_SUMMARY_JSON}" ]]; then
+        staging_json=$(cat "${STAGING_SUMMARY_JSON}")
+    fi
+
+    mkdir -p "$(dirname "${BUILD_REPORT_JSON}")"
+
+    cat > "${BUILD_REPORT_JSON}" <<EOF
+{
+  "kind": "build-report",
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "image": "${full_image}:${VERSION}",
+  "test": ${test_json},
+  "staging": ${staging_json}
+}
+EOF
+
+    echo "    report: ${BUILD_REPORT_JSON}" >&2
+    if [[ -n "${TEST_SUMMARY_JSON:-}" ]]; then
+        echo "    report section test: ${TEST_SUMMARY_JSON}" >&2
+    fi
+    if [[ -n "${STAGING_SUMMARY_JSON:-}" ]]; then
+        echo "    report section staging: ${STAGING_SUMMARY_JSON}" >&2
     fi
 }
 
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
-
-usage() {
-    cat <<'EOF'
-Usage: ./build [options]
-
-Stages (all on by default unless skipped):
-  1  lint        hadolint, shellcheck, markdownlint
-  2  build       docker buildx build --load
-  3  test        bats test suite
-  4  scan        trivy, grype, docker scout
-  5  push        multi-platform push to registry (opt-in)
-
-Options:
-  --push                  Push to registry after build
-  --version VERSION       Set image version tag (default: dev-<sha>)
-  --platform PLATFORMS    Comma-separated buildx platforms
-  --registry REGISTRY     Registry prefix (default: 1121citrus)
-  --no-sbom               Disable SBOM generation on push
-  --no-provenance         Disable provenance attestation on push
-  --no-lint               Skip lint stage
-  --no-test               Skip test stage
-  --run-staging           Run staging tests (if test/staging exists)
-  --no-scan               Skip all scan stages
-  --advise ADVISEMENTS    Comma-separated: dive,coverage,metrics,all,none
-  --cache SPEC            reset=trivy|grype|all  skip-update=trivy|grype|all
-  --dry-run               Print commands without executing
-  --help                  Show this help
-EOF
+_require_value() {
+    local option="$1"
+    local value="${2:-}"
+    if [[ -z "${value}" || "${value}" == --* ]]; then
+        echo "${option} requires a value" >&2
+        exit 1
+    fi
 }
 
 while [[ $# -gt 0 ]]; do
-    case "${1}" in
-        --push)            PUSH=true ;;
-        --version)         VERSION="${2}"; shift ;;
-        --platform)        PLATFORM="${2}"; shift ;;
-        --registry)        REGISTRY="${2}"; IMAGE="${REGISTRY}/usb-explore" ;;
-        --no-sbom)         DO_SBOM=false ;;
-        --no-provenance)   DO_PROVENANCE=false ;;
-        --no-lint)         DO_LINT=false ;;
-        --no-test)         DO_TEST=false ;;
-        --run-staging)     DO_STAGING=true ;;
-        --no-scan)         DO_SCAN=false; DO_SCAN_GRYPE=false
-                           DO_SCAN_SCOUT=false ;;
-        --advise)          ADVISE="${2}"; shift ;;
-        --cache)           # e.g. --cache "reset=trivy;skip-update=grype"
-            for _spec in ${2//;/ }; do
-                _k="${_spec%%=*}"; _v="${_spec#*=}"
-                case "${_k}" in
-                    reset)       CACHE_RESET="${_v}" ;;
-                    skip-update) CACHE_SKIP_UPDATE="${_v}" ;;
-                    *) die "Unknown cache key: ${_k}" ;;
+    case "$1" in
+        --push)             PUSH=true ;;
+        --version)          _require_value "$1" "${2:-}"; VERSION="$2"; shift ;;
+        --platform)         _require_value "$1" "${2:-}"; PLATFORMS="$2"; shift ;;
+        --registry)         _require_value "$1" "${2:-}"; REGISTRY="$2"; shift ;;
+        --no-sbom)          SBOM=false ;;
+        --no-provenance)    PROVENANCE=false ;;
+        --no-lint)          LINT=false ;;
+        --no-test)          TEST=false ;;
+        --run-staging)      RUN_STAGING=true ;;
+        --no-scan)
+            SCAN=false
+            SCAN_GRYPE=false
+            SCAN_SCOUT=false
+            ;;
+        --advise|--advice)
+            _ADVISE_EXPLICIT=true
+            # Check if next arg looks like an advisement list (no -- prefix)
+            if [[ $# -gt 1 && ! "$2" =~ ^-- ]]; then
+                advisements="$2"; shift
+            else
+                advisements="all"
+            fi
+            # Parse the comma-delimited list
+            ADVISE_DIVE=false
+            ADVISE_METRICS=false
+            ADVISE_SECURITY=false
+            IFS=',' read -ra adv_list <<< "$advisements"
+            for adv in "${adv_list[@]}"; do
+                adv="${adv//[[:space:]]/}"
+                adv="${adv,,}"
+                case "$adv" in
+                    dive)     ADVISE_DIVE=true ;;
+                    metrics)  ADVISE_METRICS=true ;;
+                    security) ADVISE_SECURITY=true ;;
+                    all)
+                        ADVISE_DIVE=true
+                        ADVISE_METRICS=true
+                        ADVISE_SECURITY=true
+                        ;;
+                    none)
+                        ADVISE_DIVE=false
+                        ADVISE_METRICS=false
+                        ADVISE_SECURITY=false
+                        ;;
+                    *)  echo "Unknown advisement: $adv" >&2; exit 1 ;;
                 esac
             done
-            shift ;;
-        --dry-run)         DRY_RUN=true ;;
-        --help|-h)         usage; exit 0 ;;
-        *) die "Unknown option: ${1}. Run ./build --help for usage." ;;
+            ;;
+        --no-advise)
+            ADVISE_DIVE=false
+            ADVISE_METRICS=false
+            ADVISE_SECURITY=false
+            _ADVISE_EXPLICIT=true
+            ;;
+        --cache)
+            if [[ $# -lt 2 || "$2" =~ ^-- ]]; then
+                echo "--cache requires CACHE_RULES" >&2
+                exit 1
+            fi
+            parse_cache_rules "$2"
+            shift
+            ;;
+        --dry-run)          DRY_RUN=true ;;
+        --help|-h)
+            sed -n '3,/^# HELP_ENDS_HERE/p' "$0" \
+                | grep '^#' \
+                | sed 's/^# \{0,1\}//' \
+                | head -n -1
+            exit 0 ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 1 ;;
     esac
     shift
 done
 
-# ---------------------------------------------------------------------------
-# Version derivation
-# ---------------------------------------------------------------------------
+# --no-scan implies --no-advise unless --advise was given explicitly.
+if [[ "${SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
+    ADVISE_DIVE=false
+    ADVISE_METRICS=false
+    ADVISE_SECURITY=false
+fi
 
+# ---------------------------------------------------------------------------
+# Resolve the image version tag.
+# ---------------------------------------------------------------------------
 if [[ -z "${VERSION}" ]]; then
-    _sha=$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null \
-           || echo "unknown")
-    VERSION="dev-${_sha}"
+    sha=$(git -C "$(dirname "$0")" rev-parse --short HEAD 2>/dev/null \
+        || echo "unknown")
+    VERSION="dev-${sha}"
 fi
 
-GIT_COMMIT=$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null \
-             || echo "unknown")
-BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+git_commit=$(git -C "$(dirname "$0")" rev-parse --short HEAD 2>/dev/null || echo unknown)
+build_date=$(date -u +%Y%m%dT%H%M%S)
 
 # ---------------------------------------------------------------------------
-# Platform
+# Construct the tag list.
+# Dev builds are tagged as both dev-<commit> and dev-latest.
+# "latest" is only added for non-dev (release) builds that will be pushed.
 # ---------------------------------------------------------------------------
-
-if [[ -z "${PLATFORM}" ]]; then
-    PLATFORM=$(docker info --format '{{.OSType}}/{{.Architecture}}' \
-               2>/dev/null || echo "linux/amd64")
-fi
-
-# ---------------------------------------------------------------------------
-# Tags
-# ---------------------------------------------------------------------------
-
-TAGS=("--tag" "${IMAGE}:${VERSION}")
+full_image="${REGISTRY}/${IMAGE_NAME}"
+# Re-tag as :latest locally so test scripts that default to IMAGE:latest work.
+tags=("--tag" "${full_image}:${VERSION}" "--tag" "${full_image}:latest")
 if [[ "${VERSION}" == dev-* ]]; then
-    TAGS+=("--tag" "${IMAGE}:dev-latest")
-else
-    if [[ "${PUSH}" != true ]]; then
-        TAGS+=("--tag" "${IMAGE}:latest")
-    fi
+    tags+=("--tag" "${full_image}:dev-latest")
+fi
+if [[ "${PUSH}" == "true" && "${VERSION}" == dev-* ]]; then
+    # For dev builds being pushed, keep dev tags but drop :latest.
+    tags=("--tag" "${full_image}:${VERSION}" "--tag" "${full_image}:dev-latest")
 fi
 
-PUSH_TAGS=("--tag" "${IMAGE}:${VERSION}")
-if [[ "${VERSION}" != dev-* ]]; then
-    PUSH_TAGS+=("--tag" "${IMAGE}:latest")
-else
-    PUSH_TAGS+=("--tag" "${IMAGE}:dev-latest")
+# Build-arg for the application version (stored in the image).
+version_build_arg=("--build-arg" "VERSION=${VERSION}")
+
+# Script directory for build context and relative paths.
+script_dir=$(dirname "$(readlink -f "$0")")
+
+if [[ "${CACHE_RESET_TRIVY}" == "true" ]]; then
+    echo "==> Cache: reset Trivy DB" >&2
+    reset_cache_db "${TRIVY_CACHE_VOLUME}"
 fi
 
-# ---------------------------------------------------------------------------
-# Cache helpers
-# ---------------------------------------------------------------------------
+if [[ "${CACHE_RESET_GRYPE}" == "true" ]]; then
+    echo "==> Cache: reset Grype DB" >&2
+    reset_cache_db "${GRYPE_CACHE_VOLUME}"
+fi
 
-_cache_applies() {
-    local target="${1}" spec="${2}"
-    [[ "${spec}" == "all" || "${spec}" == "${target}" ]]
-}
+if [[ "${CACHE_SKIP_UPDATE_TRIVY}" == "true" ]]; then
+    echo "    Trivy DB update skipped (--cache skip-update=trivy)" >&2
+fi
 
-reset_cache_vol() {
-    local vol="${1}"
-    log "Resetting cache volume: ${vol}"
-    run docker volume rm "${vol}" 2>/dev/null || true
-    run docker volume create "${vol}"
-}
+if [[ "${CACHE_SKIP_UPDATE_GRYPE}" == "true" ]]; then
+    echo "    Grype DB update skipped (--cache skip-update=grype)" >&2
+fi
+
+echo "Image:     ${full_image}:${VERSION}" >&2
+echo "Platforms: ${PLATFORMS}" >&2
+echo "Push:      ${PUSH}" >&2
+echo "Trivy DB:  volume:${TRIVY_CACHE_VOLUME}" >&2
+echo "Grype DB:  volume:${GRYPE_CACHE_VOLUME}" >&2
+echo "" >&2
 
 # ---------------------------------------------------------------------------
 # Stage 1: Lint
 # ---------------------------------------------------------------------------
+if [[ "${LINT}" == "true" ]]; then
+    echo "==> Stage 1: Lint" >&2
 
-stage_lint() {
-    log "Stage 1: Lint"
+    echo "    hadolint Dockerfile" >&2
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY RUN] docker run --rm -i ${HADOLINT_IMAGE}:${HADOLINT_TAG} < Dockerfile" >&2
+    else
+        docker run --rm -i "${HADOLINT_IMAGE}:${HADOLINT_TAG}" \
+            < "${script_dir}/Dockerfile"
+    fi
 
-    log "  hadolint"
+    echo "    shellcheck bash scripts" >&2
+    (cd "${script_dir}" && run docker run --rm \
+        -v "${script_dir}:/src:ro" \
+        --workdir /src \
+        "${SHELLCHECK_IMAGE}:${SHELLCHECK_TAG}" \
+            -S warning \
+            -x \
+ \
+            /src/build \
+            /src/src/usb-explore \
+            /src/src/container/entrypoint.sh \
+            /src/src/container/info.sh \
+            /src/src/container/dispatch.sh \
+            /src/src/container/drivers/ext.sh \
+            /src/src/container/drivers/xfs.sh \
+            /src/src/container/drivers/vfat.sh)
+
+    echo "    markdownlint **/*.md" >&2
     run docker run --rm \
-        -v "${SCRIPT_DIR}/Dockerfile:/Dockerfile:ro" \
-        hadolint/hadolint:latest hadolint /Dockerfile \
-        && ok "hadolint passed"
-
-    log "  shellcheck"
-    run docker run --rm \
-        -v "${SCRIPT_DIR}:/src:ro" \
-        -w /src \
-        koalaman/shellcheck:stable \
-        shellcheck -S warning -x \
-            src/usb-explore \
-            src/container/entrypoint.sh \
-            src/container/info.sh \
-            src/container/dispatch.sh \
-            src/container/drivers/ext.sh \
-            src/container/drivers/xfs.sh \
-            src/container/drivers/vfat.sh \
-        && ok "shellcheck passed"
-
-    log "  markdownlint"
-    run docker run --rm \
-        -v "${SCRIPT_DIR}:/src:ro" \
-        -w /src \
-        davidanson/markdownlint-cli2:latest \
-        "**/*.md" \
-        && ok "markdownlint passed"
-}
+        -v "${script_dir}:/md:ro" \
+        --workdir /md \
+        "${MARKDOWNLINT_IMAGE}:${MARKDOWNLINT_TAG}" \
+            '**/*.md'
+fi
 
 # ---------------------------------------------------------------------------
-# Stage 2: Build
+# Stage 2: Build (local, single-platform)
 # ---------------------------------------------------------------------------
+echo "==> Stage 2: Build ${full_image}:${VERSION}" >&2
 
-stage_build() {
-    log "Stage 2: Build  [${PLATFORM}]  version=${VERSION}"
-    run docker buildx build \
-        --platform "${PLATFORM}" \
-        --build-arg "VERSION=${VERSION}" \
-        --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
-        --build-arg "BUILD_DATE=${BUILD_DATE}" \
-        "${TAGS[@]}" \
-        --load \
-        "${SCRIPT_DIR}"
-    ok "Image built: ${IMAGE}:${VERSION}"
-}
+host_platform=$(docker info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null \
+    || echo "linux/amd64")
+
+build_cmd=(
+    docker buildx build
+    --platform "${host_platform}"
+    "${tags[@]}"
+    "${version_build_arg[@]}"
+    "--build-arg" "GIT_COMMIT=${git_commit}"
+    "--build-arg" "BUILD_DATE=${build_date}"
+    --load
+)
+
+if [[ -n "${BUILD_EXTRA_ARGS:-}" ]]; then
+    # shellcheck disable=SC2206
+    build_cmd+=(${BUILD_EXTRA_ARGS})
+fi
+
+build_cmd+=("${script_dir}")
+
+if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "[DRY RUN] Would execute:" >&2
+    printf '  %s \\\n' "${build_cmd[@]}"
+else
+    "${build_cmd[@]}"
+fi
 
 # ---------------------------------------------------------------------------
 # Stage 3: Test
 # ---------------------------------------------------------------------------
-
-stage_test() {
-    log "Stage 3: Test"
-
-    # Generate fixture images if missing
-    if [[ ! -f "${SCRIPT_DIR}/fixtures/single-ext4.img" ]]; then
-        log "  Generating test fixtures..."
-        run bash "${SCRIPT_DIR}/fixtures/generate.sh"
-    fi
-
-    if [[ -x "${SCRIPT_DIR}/test/run-all" ]]; then
-        run IMAGE="${IMAGE}:${VERSION}" \
-            bash "${SCRIPT_DIR}/test/run-all"
+if [[ "${TEST}" == "true" ]]; then
+    echo "==> Stage 3: Test" >&2
+    if [[ -x "${script_dir}/test/run-all" ]]; then
+        (cd "${script_dir}" && IMAGE="${full_image}:${VERSION}" TEST_SUMMARY_JSON="${TEST_SUMMARY_JSON}" run ./test/run-all)
     else
-        run docker run --rm \
-            -v "${SCRIPT_DIR}:${SCRIPT_DIR}" \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -w "${SCRIPT_DIR}" \
-            -e "IMAGE=${IMAGE}:${VERSION}" \
-            bats/bats:1.13.0 \
-            bats \
+    run docker run -i --rm \
+        -v "${script_dir}:${script_dir}" \
+        -v /tmp:/tmp \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -e "IMAGE=${full_image}:${VERSION}" \
+        --workdir "${script_dir}" \
+        --entrypoint sh \
+        bats/bats:1.13.0 \
+        -c "apk add --quiet --no-cache docker-cli >/dev/null 2>&1 \
+            && bats \
                 test/01-build.bats \
                 test/02-image-structure.bats \
                 test/03-invocation.bats \
                 test/04-env-metadata.bats \
                 test/05-partition-discovery.bats \
-                test/06-subcommands.bats
+                test/06-subcommands.bats"
     fi
-    ok "Tests passed"
-}
+    write_build_report
+fi
 
 # ---------------------------------------------------------------------------
-# Stage 3b: Staging (opt-in)
+# Stage 3d: Staging (optional)
+# Runs test/staging only when explicitly requested with --run-staging.
 # ---------------------------------------------------------------------------
-
-stage_staging() {
-    if [[ -x "${SCRIPT_DIR}/test/staging" ]]; then
-        log "Stage 3b: Staging"
-        run IMAGE="${IMAGE}:${VERSION}" bash "${SCRIPT_DIR}/test/staging"
-        ok "Staging passed"
+if [[ "${RUN_STAGING}" == "true" ]]; then
+    echo "==> Stage 3d: Staging" >&2
+    if [[ ! -x "${script_dir}/test/staging" ]]; then
+        echo "    SKIP: test/staging not found or not executable" >&2
     else
-        warn "No test/staging script found; skipping."
+        (cd "${script_dir}" && run env STAGING_SUMMARY_JSON="${STAGING_SUMMARY_JSON}" ./test/staging)
     fi
-}
+    write_build_report
+fi
 
 # ---------------------------------------------------------------------------
-# Stage 4: Scan
+# Stages 4 & 4b: shared image archive
+#
+# Trivy and Grype receive the image as a tar archive rather than via the
+# Docker daemon socket.  The socket mount hangs on macOS Docker Desktop, and
+# the archive approach is faster and more portable.
 # ---------------------------------------------------------------------------
-
-stage_scan_trivy() {
-    log "Stage 4a: Scan (Trivy)"
-
-    if _cache_applies trivy "${CACHE_RESET}"; then
-        reset_cache_vol "${TRIVY_CACHE_VOL}"
+_scan_tar=""
+if [[ "${SCAN}" == "true" || "${SCAN_GRYPE}" == "true" ]]; then
+    _scan_tar=$(mktemp /tmp/image-scan-XXXXXX)
+    trap 'rm -f "${_scan_tar}"' EXIT
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY RUN] docker save ${full_image}:${VERSION} > ${_scan_tar}" >&2
+    else
+        docker save "${full_image}:${VERSION}" > "${_scan_tar}"
     fi
+fi
 
-    local skip_update=""
-    if _cache_applies trivy "${CACHE_SKIP_UPDATE}"; then
-        skip_update="--skip-update"
+# ---------------------------------------------------------------------------
+# Stage 4a: Prime Trivy DB (ensure DB exists before scan)
+# ---------------------------------------------------------------------------
+if [[ "${SCAN}" == "true" ]]; then
+    if [[ "${CACHE_SKIP_UPDATE_TRIVY}" != "true" ]]; then
+        if ! volume_has_file "${TRIVY_CACHE_VOLUME}" "/cache/db/trivy.db"; then
+            echo "==> Stage 4a: Prime Trivy DB" >&2
+            echo "    Priming Trivy DB cache (first run)" >&2
+            # Prime the DB in a separate step to handle network errors gracefully.
+            if ! run docker run --rm \
+                -v "${TRIVY_CACHE_VOLUME}:/root/.cache/trivy" \
+                "${TRIVY_IMAGE}:${TRIVY_TAG}" image \
+                    --quiet --download-db-only; then
+                echo "    Warning: could not initialize Trivy DB cache; scan may be slow" >&2
+            fi
+        fi
     fi
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 4: Scan (Trivy — gating; exits non-zero on CRITICAL/HIGH findings)
+# ---------------------------------------------------------------------------
+if [[ "${SCAN}" == "true" ]]; then
+    echo "==> Stage 4: Scan ${full_image}:${VERSION}" >&2
+
+    _trivy_db_flags=(--skip-db-update --skip-java-db-update)
 
     run docker run --rm \
-        -v /var/run/docker.sock:/var/run/docker.sock \
-        -v "${TRIVY_CACHE_VOL}:/root/.cache/trivy" \
-        aquasec/trivy:latest image \
-        --ignore-unfixed \
-        --severity HIGH,CRITICAL \
-        --timeout 5m \
-        ${skip_update} \
-        "${IMAGE}:${VERSION}"
-    ok "Trivy passed"
-}
-
-stage_scan_grype() {
-    log "Stage 4b: Scan (Grype)"
-
-    if _cache_applies grype "${CACHE_RESET}"; then
-        reset_cache_vol "${GRYPE_CACHE_VOL}"
-    fi
-
-    local update_flag="--update-db"
-    if _cache_applies grype "${CACHE_SKIP_UPDATE}"; then
-        update_flag="--skip-update"
-    fi
-
-    local grype_config_args=()
-    if [[ -f "${SCRIPT_DIR}/.grype.yaml" ]]; then
-        grype_config_args=(--config /config/.grype.yaml)
-    fi
-
-    run docker run --rm \
-        -v /var/run/docker.sock:/var/run/docker.sock \
-        -v "${GRYPE_CACHE_VOL}:/root/.cache/grype" \
-        -v "${SCRIPT_DIR}:/config:ro" \
-        anchore/grype:latest \
-        "${update_flag}" \
-        "${grype_config_args[@]}" \
-        "${IMAGE}:${VERSION}"
-    ok "Grype passed"
-}
-
-stage_scan_scout() {
-    log "Stage 4c: Scan (Docker Scout)"
-    if ! docker scout version >/dev/null 2>&1; then
-        warn "docker scout not available; skipping."
-        return 0
-    fi
-    run docker scout cves "${IMAGE}:${VERSION}"
-    ok "Scout passed"
-}
+        -v "${_scan_tar}:/scan.tar:ro" \
+        -v "${TRIVY_CACHE_VOLUME}:/root/.cache/trivy" \
+        "${TRIVY_IMAGE}:${TRIVY_TAG}" image \
+            --quiet \
+            --no-progress \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            --timeout 5m \
+            "${_trivy_db_flags[@]}" \
+            --input /scan.tar
+fi
 
 # ---------------------------------------------------------------------------
-# Stage 5: Advise
+# Stage 4b: Scan (Grype — gating; exits non-zero on findings)
+# Runs a full-severity Grype scan.  Exit code blocks the build.
 # ---------------------------------------------------------------------------
+if [[ "${SCAN_GRYPE}" == "true" ]]; then
+    echo "==> Stage 4b: Scan (Grype) ${full_image}:${VERSION}" >&2
 
-_advise_applies() {
-    local name="${1}"
-    [[ "${ADVISE}" == "all" \
-    || "${ADVISE}" == "${name}" \
-    || "${ADVISE}" == *",${name}"* \
-    || "${ADVISE}" == *"${name},"* ]]
-}
+    _grype_run_scan=true
 
-stage_advise() {
-    if _advise_applies dive; then
-        log "Advise: Dive (layer analysis)"
+    if ! grype_db_ready "${GRYPE_CACHE_VOLUME}"; then
+        echo "    No Grype DB cache found; priming ${GRYPE_CACHE_VOLUME}" >&2
+    fi
+
+    if [[ "${CACHE_SKIP_UPDATE_GRYPE}" == "true" ]]; then
+        if ! grype_db_ready "${GRYPE_CACHE_VOLUME}"; then
+            echo "    Warning: Grype DB cache is empty; skipping Grype scan" >&2
+            _grype_run_scan=false
+        fi
+    elif ! grype_db_ready "${GRYPE_CACHE_VOLUME}"; then
+        echo "    Priming Grype DB cache (first run)" >&2
+        if ! _timed 300 docker run --rm \
+            -e "GRYPE_DB_CACHE_DIR=${GRYPE_DB_CACHE_DIR}" \
+            -v "${GRYPE_CACHE_VOLUME}:${GRYPE_DB_CACHE_DIR}" \
+            "${GRYPE_IMAGE}:${GRYPE_TAG}" db update --quiet; then
+            echo "    Warning: could not initialize Grype DB cache; skipping Grype scan" >&2
+            _grype_run_scan=false
+        fi
+    fi
+
+    if [[ "${_grype_run_scan}" == "true" ]]; then
+        _grype_vol=()
+        _grype_cfg=()
+        if [[ -f "${script_dir}/.grype.yaml" ]]; then
+            _grype_vol=(-v "${script_dir}/.grype.yaml:/.grype.yaml:ro")
+            _grype_cfg=(--config /.grype.yaml)
+        fi
+        _timed 600 docker run --rm \
+            -v "${_scan_tar}:/scan.tar:ro" \
+            -e "GRYPE_DB_CACHE_DIR=${GRYPE_DB_CACHE_DIR}" \
+            -v "${GRYPE_CACHE_VOLUME}:${GRYPE_DB_CACHE_DIR}" \
+            "${_grype_vol[@]}" \
+            -e GRYPE_DB_AUTO_UPDATE=false \
+            "${GRYPE_IMAGE}:${GRYPE_TAG}" \
+                "${_grype_cfg[@]}" \
+                docker-archive:/scan.tar
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 4c: Scan (Docker Scout — gating)
+# Runs Docker Scout CVE scan.  Exit code blocks the build.
+# Skips cleanly if the scout-cli plugin image is unavailable.
+# ---------------------------------------------------------------------------
+if [[ "${SCAN_SCOUT}" == "true" ]]; then
+    echo "==> Stage 4c: Scan (Scout) ${full_image}:${VERSION}" >&2
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        run docker scout cves "${full_image}:${VERSION}"
+    else
+        set +e
+        _scout_out=$(docker scout cves "${full_image}:${VERSION}" 2>&1)
+        _scout_status=$?
+        set -e
+        if [[ ${_scout_status} -ne 0 ]] \
+            && echo "${_scout_out}" \
+                | grep -qiE 'not found|cannot pull|failed to resolve'; then
+            echo "    Scout scan skipped: docker/scout-cli image unavailable." >&2
+        else
+            echo "${_scout_out}" >&2
+            if [[ ${_scout_status} -ne 0 ]]; then
+                exit "${_scout_status}"
+            fi
+        fi
+    fi
+fi
+
+# Clean up shared scan archive.
+if [[ -n "${_scan_tar}" ]]; then
+    rm -f "${_scan_tar}"
+    trap - EXIT
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 5c: Advise (Dive — non-gating)
+# Analyzes image layers for bloat and optimization opportunities.
+# Pre-checks Docker daemon API version compatibility; skips cleanly if
+# incompatible.  Never sets a non-zero exit code.
+# ---------------------------------------------------------------------------
+if [[ "${ADVISE_DIVE}" == "true" ]]; then
+    echo "==> Stage 5c: Advise (Dive) ${full_image}:${VERSION}" >&2
+    daemon_min_api=$(docker version \
+        --format '{{.Server.MinAPIVersion}}' 2>/dev/null || true)
+    if [[ -n "${daemon_min_api}" ]] \
+        && [[ "$(printf '%s\n' \
+                "${DIVE_DOCKER_CLIENT_API}" \
+                "${daemon_min_api}" \
+                | sort -V | tail -n1)" == "${daemon_min_api}" ]] \
+        && [[ "${daemon_min_api}" != "${DIVE_DOCKER_CLIENT_API}" ]]; then
+        echo "    Skipping Dive: daemon requires API >= ${daemon_min_api}," \
+             "but ${DIVE_IMAGE}:${DIVE_TAG} uses ${DIVE_DOCKER_CLIENT_API}." >&2
+    else
+        _dive_ci_config=()
+        if [[ -f "${script_dir}/.dive-ci" ]]; then
+            _dive_ci_config=(-v "${script_dir}/.dive-ci:/.dive-ci:ro")
+        fi
         run docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            wagoodman/dive:latest "${IMAGE}:${VERSION}" || true
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            "${_dive_ci_config[@]}" \
+            "${DIVE_IMAGE}:${DIVE_TAG}" \
+                --source docker \
+                --ci \
+                --ci-config /.dive-ci \
+                "${full_image}:${VERSION}" || true
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 5f: Advise (scc — code metrics)
+# Counts source lines by language.  Results printed to stderr.
+# Never blocks the build.
+# ---------------------------------------------------------------------------
+if [[ "${ADVISE_METRICS}" == "true" ]]; then
+    echo "==> Stage 5f: Advise (metrics) ${full_image}:${VERSION}" >&2
+    docker run --rm \
+        -v "${script_dir}:/data:ro" \
+        "${SCC_IMAGE}:${SCC_TAG}" \
+        scc --by-file /data >&2 || true
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 5g: Advise (graudit — security pattern scan)
+# Clones graudit at runtime, scans src/ with bash+strings signatures.
+# Results printed to stderr.  Never blocks the build.
+# ---------------------------------------------------------------------------
+if [[ "${ADVISE_SECURITY}" == "true" ]]; then
+    echo "==> Stage 5g: Advise (security) ${full_image}:${VERSION}" >&2
+    _graudit_tmp=$(mktemp -d /tmp/graudit-XXXXXX)
+    # shellcheck disable=SC2064
+    trap "rm -rf '${_graudit_tmp}'" EXIT
+    if git clone --quiet --depth 1 \
+            https://github.com/wireghoul/graudit.git \
+            "${_graudit_tmp}/graudit" >&2; then
+        _shim_dir="${_graudit_tmp}/shim"
+        mkdir -p "${_shim_dir}"
+        _real_grep=$(command -v grep)
+        printf '#!/bin/sh\nexec "%s" --exclude-dir=node_modules --exclude-dir=__pycache__ --exclude-dir=.venv "$@"\n' \
+            "${_real_grep}" > "${_shim_dir}/grep"
+        printf '#!/bin/sh\nexec "%s" -E --exclude-dir=node_modules --exclude-dir=__pycache__ --exclude-dir=.venv "$@"\n' \
+            "${_real_grep}" > "${_shim_dir}/egrep"
+        chmod +x "${_shim_dir}/grep" "${_shim_dir}/egrep"
+        PATH="${_shim_dir}:${PATH}" \
+            "${_graudit_tmp}/graudit/graudit" \
+                -d bash -d strings \
+                "${script_dir}/src" >&2 || true
+    else
+        echo "    Security scan skipped: graudit clone failed" >&2
+    fi
+    rm -rf "${_graudit_tmp}"
+    trap - EXIT
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 6: Push (multi-platform)
+# Only runs when --push is specified; rebuilds for all target platforms.
+# ---------------------------------------------------------------------------
+if [[ "${PUSH}" == "true" ]]; then
+    echo "==> Stage 6: Push ${full_image}:${VERSION} (${PLATFORMS})" >&2
+
+    # For push, include :latest on releases and :dev-latest on dev builds.
+    push_tags=("--tag" "${full_image}:${VERSION}")
+    if [[ "${VERSION}" == dev-* ]]; then
+        push_tags+=("--tag" "${full_image}:dev-latest")
+    else
+        push_tags+=("--tag" "${full_image}:latest")
     fi
 
-    if _advise_applies metrics; then
-        log "Advise: Metrics (scc)"
-        run docker run --rm \
-            -v "${SCRIPT_DIR}:/src:ro" \
-            -w /src \
-            boyter/scc:latest scc src/ || true
+    if [[ "${PROVENANCE}" == "true" ]]; then
+        provenance_flag="--provenance=mode=max"
+    else
+        provenance_flag="--provenance=false"
     fi
-}
 
-# ---------------------------------------------------------------------------
-# Stage 6: Push
-# ---------------------------------------------------------------------------
+    push_cmd=(
+        docker buildx build
+        --platform "${PLATFORMS}"
+        "${push_tags[@]}"
+        "${version_build_arg[@]}"
+        "--build-arg" "GIT_COMMIT=${git_commit}"
+        "--build-arg" "BUILD_DATE=${build_date}"
+        "--sbom=${SBOM}"
+        "${provenance_flag}"
+        --push
+    )
 
-stage_push() {
-    log "Stage 6: Push  [linux/amd64,linux/arm64]  version=${VERSION}"
+    if [[ -n "${BUILD_EXTRA_ARGS:-}" ]]; then
+        # shellcheck disable=SC2206
+        push_cmd+=(${BUILD_EXTRA_ARGS})
+    fi
 
-    local sbom_flag="" prov_flag=""
-    [[ "${DO_SBOM}" == true ]]       && sbom_flag="--sbom=true"
-    [[ "${DO_PROVENANCE}" == true ]] && prov_flag="--provenance=mode=max"
+    push_cmd+=("${script_dir}")
 
-    run docker buildx build \
-        --platform linux/amd64,linux/arm64 \
-        --build-arg "VERSION=${VERSION}" \
-        --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
-        --build-arg "BUILD_DATE=${BUILD_DATE}" \
-        "${PUSH_TAGS[@]}" \
-        ${sbom_flag} \
-        ${prov_flag} \
-        --push \
-        "${SCRIPT_DIR}"
-    ok "Pushed: ${PUSH_TAGS[*]}"
-}
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY RUN] Would execute:" >&2
+        printf '  %s \\\n' "${push_cmd[@]}"
+    else
+        "${push_cmd[@]}"
+    fi
+fi
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-echo ""
-echo -e "${BOLD}usb-explore build${RESET}  version=${VERSION}  push=${PUSH}"
-echo ""
-
-[[ "${DO_LINT}" == true ]]        && stage_lint
-stage_build
-[[ "${DO_TEST}" == true ]]        && stage_test
-[[ "${DO_STAGING}" == true ]]     && stage_staging
-[[ "${DO_SCAN}" == true ]]        && stage_scan_trivy
-[[ "${DO_SCAN_GRYPE}" == true ]]  && stage_scan_grype
-[[ "${DO_SCAN_SCOUT}" == true ]]  && stage_scan_scout
-[[ -n "${ADVISE}" && "${ADVISE}" != "none" ]] && stage_advise
-[[ "${PUSH}" == true ]]           && stage_push
-
-echo ""
-ok "Build complete: ${IMAGE}:${VERSION}"
-echo ""
+echo "" >&2
+echo "Done: ${full_image}:${VERSION}" >&2
