@@ -1,0 +1,9 @@
+.git
+.github
+.claude
+dev/
+doc/
+fixtures/
+test/
+*.md
+!src/

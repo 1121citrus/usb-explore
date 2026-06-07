@@ -1,0 +1,4 @@
+ignore:
+  # Add accepted CVEs here with justification, e.g.:
+  # - vulnerability: CVE-YYYY-NNNNN
+  #   reason: "upstream only; no fix available; not exploitable in this context"

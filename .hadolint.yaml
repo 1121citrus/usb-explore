@@ -1,0 +1,6 @@
+failure-threshold: warning
+ignore:
+  # DL3008: pin apt versions — acceptable for a dev tool with CVE scanning
+  - DL3008
+  # DL3009: delete apt lists — handled in the same RUN layer
+  - DL3009
