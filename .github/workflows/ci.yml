@@ -142,23 +142,10 @@ jobs:
 
       - name: Run BATS tests
         run: |
-          IMAGE_REF="${{ env.IMAGE }}:${{ needs.build.outputs.version }}"
-          # Note: bats is the container ENTRYPOINT; do NOT repeat 'bats' after
-          # the image name or it becomes the first test-file argument.
-          docker run --rm \
-            -v "$PWD:$PWD" \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -w "$PWD" \
-            -e "IMAGE=${IMAGE_REF}" \
-            bats/bats:1.13.0 \
-              test/01-build.bats \
-              test/02-image-structure.bats \
-              test/03-invocation.bats \
-              test/04-env-metadata.bats \
-              test/05-partition-discovery.bats \
-              test/06-subcommands.bats \
-              test/07-capture.bats \
-              test/08-cli.bats
+          # test/run-all starts bats/bats:1.13.0 with --entrypoint sh and
+          # runs 'apk add docker-cli' first so tests can invoke docker run.
+          IMAGE="${{ env.IMAGE }}:${{ needs.build.outputs.version }}" \
+            bash test/run-all
 
   # --------------------------------------------------------------------------
   # Stage 4: Scan (parallel with test)
