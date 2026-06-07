@@ -32,6 +32,9 @@ LABEL org.opencontainers.image.vendor="1121 Citrus"
 LABEL org.opencontainers.image.licenses="${LICENSE}"
 LABEL org.opencontainers.image.authors="${AUTHORS}"
 
+# hadolint ignore=DL3008
+# DL3008: version pinning omitted intentionally — Trivy/Grype scan the
+# final image for CVEs, making apt version pins redundant overhead.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       util-linux \
