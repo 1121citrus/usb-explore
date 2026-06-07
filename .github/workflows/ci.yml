@@ -179,7 +179,7 @@ jobs:
         run: docker load < /tmp/image.tar.gz
 
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ needs.build.outputs.version }}
           format: sarif
