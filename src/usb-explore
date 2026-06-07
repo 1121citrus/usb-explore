@@ -1,0 +1,581 @@
+#!/usr/bin/env bash
+# usb-explore — inspect Linux USB disk images from macOS via Docker.
+#
+# Copyright (C) 2026 1121 Citrus
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# SYNOPSIS
+#   usb-explore <subcommand> [options] [arguments]
+#
+# SUBCOMMANDS
+#   build   [--no-cache]
+#             Build or rebuild the Docker image from local source.
+#
+#   capture <device> [-o|--output PATH] [--no-sparse]
+#             [--progress-interval N] [--dry-run]
+#             Copy a USB device to a disk image file using dd.
+#             This is the only subcommand that does NOT use Docker.
+#
+#   info    [-i|--image PATH] [--json]
+#             Print the partition table and filesystem metadata.
+#             --json emits machine-readable JSON.
+#
+#   shell   [-i|--image PATH] [-p|--partition N]
+#             Start an interactive bash shell with a partition mounted
+#             at /mnt/part inside the container.
+#
+#   copy    [-i|--image PATH] [-p|--partition N] <src-path> <dest>
+#             Copy <src-path> (absolute within the partition) to <dest>
+#             on the host. Directories are copied recursively.
+#
+#   run     [-i|--image PATH] [-p|--partition N] [--] <cmd> [args...]
+#             Run a command inside the container with the partition
+#             mounted. Arguments starting with / are automatically
+#             prefixed with /mnt/part.
+#
+#   diff    [-i|--image PATH] [-p|--partition N] <image-path> <ref-path>
+#             Diff <image-path> (within the partition) against <ref-path>
+#             on the host. Exit code: 0=identical, 1=different, 2=error.
+#
+# GLOBAL OPTIONS
+#   -i|--image PATH        Disk image file (default: ./usb.img)
+#   -p|--partition N       Partition number to mount (default: auto)
+#   --debug                Print docker run commands before executing
+#   --version              Print version and exit
+#   --help                 Print this help and exit
+#
+# ENVIRONMENT
+#   USB_EXPLORE_REGISTRY   Docker Hub registry prefix (default: 1121citrus)
+#   USB_EXPLORE_TAG        Image tag to use (default: latest)
+#   USB_EXPLORE_IMAGE      Default disk image path (default: ./usb.img)
+#
+# NOTES
+#   • capture requires macOS 13+ for dd conv=sparse (APFS sparse files).
+#   • All other subcommands require Docker Desktop to be running.
+#   • The container runs --privileged as root. See SECURITY.md.
+#
+# EXAMPLES
+#   # Step 1: copy the USB drive to a disk image (run once)
+#   usb-explore capture /dev/disk4
+#
+#   # Step 2: see what partitions are on the image
+#   usb-explore info
+#
+#   # Step 3a: browse the filesystem interactively
+#   usb-explore shell
+#
+#   # Step 3b: copy a specific file to the current directory
+#   usb-explore copy /etc/fstab ./fstab
+#
+#   # Step 3c: run a command against the image
+#   usb-explore run -- find /home -name '*.log'
+#
+#   # Step 3d: diff the image /etc against a local reference
+#   usb-explore diff /etc ./reference-etc
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Resolve paths and image reference
+# ---------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+REGISTRY="${USB_EXPLORE_REGISTRY:-1121citrus}"
+IMAGE_TAG="${USB_EXPLORE_TAG:-latest}"
+IMAGE_REF="${REGISTRY}/usb-explore:${IMAGE_TAG}"
+
+IMAGE_FILE="${USB_EXPLORE_IMAGE:-./usb.img}"
+PARTITION=""
+DEBUG=false
+CONTAINER_NAME="usb-explore-$$"
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+
+log()  { echo "usb-explore: ${*}" >&2; }
+err()  { echo "usb-explore: error: ${*}" >&2; }
+die()  { err "${*}"; exit 1; }
+warn() { echo "usb-explore: warning: ${*}" >&2; }
+
+# ---------------------------------------------------------------------------
+# Preflight checks
+# ---------------------------------------------------------------------------
+
+# check_docker — exit 3 if Docker is not running or not responding.
+# Args: none
+# Returns: 0 if Docker is available
+check_docker() {
+    if ! docker info >/dev/null 2>&1; then
+        err "Docker is not running or is not responding."
+        err "Start Docker Desktop and try again."
+        exit 3
+    fi
+}
+
+# check_image_file — exit 4 if the disk image does not exist.
+# Args: none (reads IMAGE_FILE)
+# Returns: 0 if file exists
+check_image_file() {
+    if [[ ! -f "${IMAGE_FILE}" ]]; then
+        err "Image file not found: ${IMAGE_FILE}"
+        err "Run 'usb-explore capture <device>' to create one,"
+        err "or pass -i <path> to specify a different image."
+        exit 4
+    fi
+}
+
+# ensure_image — pull or build the container image if not present locally.
+# Args: none
+# Returns: 0 when image is available in the local daemon
+ensure_image() {
+    if docker image inspect "${IMAGE_REF}" >/dev/null 2>&1; then
+        return 0
+    fi
+    log "Image ${IMAGE_REF} not found locally. Attempting pull..."
+    if docker pull "${IMAGE_REF}" 2>/dev/null; then
+        return 0
+    fi
+    if [[ -f "${REPO_ROOT}/Dockerfile" ]]; then
+        log "Pull failed. Building from local source..."
+        bash "${REPO_ROOT}/build" --no-lint --no-test --no-scan
+    else
+        die "Image not available and no local Dockerfile found." \
+            "Run: docker pull ${IMAGE_REF}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Interrupt / cleanup
+# ---------------------------------------------------------------------------
+
+_cleanup() {
+    docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+}
+trap '_cleanup' INT TERM EXIT
+
+# ---------------------------------------------------------------------------
+# Partition auto-selection
+# ---------------------------------------------------------------------------
+
+# resolve_partition — set PARTITION via auto-selection if not already set.
+# Runs a short-lived info --json container and applies the selection rules
+# described in the design: 0 → error, 1 → auto, 2+ → print table + error.
+# Args: none (reads IMAGE_FILE, sets PARTITION)
+# Returns: 0 with PARTITION set; exits on error
+resolve_partition() {
+    [[ -n "${PARTITION}" ]] && return 0
+
+    local json mountable count
+    json=$(docker run --rm --privileged \
+        -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro" \
+        "${IMAGE_REF}" info --json 2>/dev/null)
+
+    mountable=$(echo "${json}" \
+        | docker run --rm -i "${REGISTRY}/usb-explore:${IMAGE_TAG}" \
+            bash -c 'jq "[.partitions[] | select(.mountable == true)]"' \
+        2>/dev/null || \
+        echo "${json}" | jq '[.partitions[] | select(.mountable == true)]')
+
+    count=$(echo "${mountable}" | jq 'length')
+
+    case "${count}" in
+        0)
+            err "No mountable partitions found in ${IMAGE_FILE}."
+            err "Run 'usb-explore info' to see the full partition table."
+            exit 5 ;;
+        1)
+            PARTITION=$(echo "${mountable}" | jq -r '.[0].number')
+            local fs size
+            fs=$(echo "${mountable}" | jq -r '.[0].fstype')
+            size=$(echo "${mountable}" | jq -r '.[0].size_human')
+            log "Selected partition ${PARTITION} (${fs}, ${size})" ;;
+        *)
+            # Print the human table then error
+            docker run --rm --privileged \
+                -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro" \
+                "${IMAGE_REF}" info
+            err "Multiple mountable partitions found."
+            err "Pass -p|--partition N to select one."
+            exit 5 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Container runner
+# ---------------------------------------------------------------------------
+
+# run_container — execute a docker run with all standard flags.
+# Args: extra docker flags (before image ref), then image + cmd
+# Reads globals: IMAGE_FILE, IMAGE_REF, CONTAINER_NAME, DEBUG
+run_container() {
+    local docker_args=(
+        run
+        --rm
+        --privileged
+        --name "${CONTAINER_NAME}"
+        -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro"
+        -e "USB_PARTITION=${PARTITION:-}"
+    )
+
+    # Append any extra flags passed by the caller (e.g. -v, -e, -it)
+    docker_args+=("$@")
+
+    if [[ "${DEBUG}" == true ]]; then
+        echo "[debug] docker ${docker_args[*]}" >&2
+    fi
+
+    docker "${docker_args[@]}"
+}
+
+# tty_flags — emit -i -t when both stdin and stdout are terminals.
+# Args: none; writes flags to stdout
+tty_flags() {
+    local flags=(-i)
+    [[ -t 0 && -t 1 ]] && flags+=(-t)
+    echo "${flags[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: build
+# ---------------------------------------------------------------------------
+
+do_build() {
+    local no_cache=false
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --no-cache) no_cache=true ;;
+            *) die "Unknown build option: ${1}" ;;
+        esac
+        shift
+    done
+
+    if [[ ! -f "${REPO_ROOT}/build" ]]; then
+        die "build script not found at ${REPO_ROOT}/build." \
+            "Clone the repository to build from source."
+    fi
+
+    local args=(--no-lint --no-test --no-scan)
+    [[ "${no_cache}" == true ]] && args+=(--no-cache)
+    exec bash "${REPO_ROOT}/build" "${args[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: capture
+# ---------------------------------------------------------------------------
+
+do_capture() {
+    local device="" output="${IMAGE_FILE}" no_sparse=false
+    local progress_interval=5 dry_run=false
+
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -o|--output) output="${2}"; shift ;;
+            --no-sparse) no_sparse=true ;;
+            --progress-interval) progress_interval="${2}"; shift ;;
+            --dry-run) dry_run=true ;;
+            -*) die "Unknown capture option: ${1}" ;;
+            *)  [[ -z "${device}" ]] || die "Unexpected argument: ${1}"
+                device="${1}" ;;
+        esac
+        shift
+    done
+
+    [[ -n "${device}" ]] || die "capture requires a device argument (e.g. /dev/disk4)"
+
+    # Validate: whole-disk node only (no partition slice)
+    if [[ ! "${device}" =~ ^/dev/disk[0-9]+$ ]]; then
+        die "Expected a whole-disk device (e.g. /dev/disk4), got: ${device}"
+    fi
+
+    # Confirm the device exists
+    if ! diskutil info "${device}" >/dev/null 2>&1; then
+        die "Device not found: ${device}"
+    fi
+
+    # Unmount any mounted partitions
+    if diskutil unmountDisk "${device}" >/dev/null 2>&1; then
+        log "Unmounted ${device}"
+    fi
+
+    # Use the raw device for higher throughput
+    local raw_device="${device/\/dev\/disk//dev/rdisk}"
+
+    # Check output filesystem for APFS (sparse file support)
+    local out_dir; out_dir="$(dirname "$(realpath "${output}" 2>/dev/null \
+                              || echo "${output}")")"
+    if [[ -d "${out_dir}" ]]; then
+        local out_mount fs_type
+        out_mount=$(df -P "${out_dir}" 2>/dev/null | awk 'NR==2 {print $6}')
+        fs_type=$(diskutil info "${out_mount}" 2>/dev/null \
+                  | awk -F': *' '/File System Personality/ {print $2}' \
+                  || echo "")
+        if [[ "${fs_type}" != *APFS* && "${no_sparse}" == false ]]; then
+            warn "Output volume is ${fs_type:-unknown}, not APFS."
+            warn "Sparse copy will not save disk space on this volume."
+        fi
+    fi
+
+    # Build the dd argument list
+    local dd_args=("if=${raw_device}" "of=${output}" "bs=4m")
+    [[ "${no_sparse}" == false ]] && dd_args+=("conv=sparse")
+
+    log "Capturing ${raw_device} → ${output}"
+    log "Sparse: $([[ "${no_sparse}" == false ]] && echo enabled || echo disabled)"
+
+    if [[ "${dry_run}" == true ]]; then
+        echo "[dry-run] sudo dd ${dd_args[*]}"
+        return 0
+    fi
+
+    sudo dd "${dd_args[@]}" &
+    local dd_pid=$!
+    while kill -0 "${dd_pid}" 2>/dev/null; do
+        kill -INFO "${dd_pid}" 2>/dev/null || true
+        sleep "${progress_interval}"
+    done
+    wait "${dd_pid}"
+
+    # Post-capture validation
+    if [[ ! -s "${output}" ]]; then
+        die "Output file is missing or empty: ${output}"
+    fi
+
+    local logical physical
+    logical=$(stat -f %z "${output}" 2>/dev/null || echo "?")
+    physical=$(du -sh "${output}" 2>/dev/null | cut -f1 || echo "?")
+    log "Capture complete."
+    log "  Logical size:  $(_fmt_bytes "${logical}")"
+    log "  Physical size: ${physical}"
+}
+
+# _fmt_bytes — format a byte count as a human-readable string.
+# Args: $1 = bytes (integer or "?")
+# Returns: 0; writes formatted string to stdout
+_fmt_bytes() {
+    local bytes="${1}"
+    [[ "${bytes}" == "?" ]] && echo "?" && return
+    awk -v b="${bytes}" 'BEGIN {
+        split("B KB MB GB TB", s)
+        i = 1
+        while (b >= 1024 && i < 5) { b /= 1024; i++ }
+        printf "%.1f %s\n", b, s[i]
+    }'
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: info
+# ---------------------------------------------------------------------------
+
+do_info() {
+    local json_mode=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --json) json_mode="--json" ;;
+            *) die "Unknown info option: ${1}" ;;
+        esac
+        shift
+    done
+
+    check_docker
+    check_image_file
+    ensure_image
+
+    # shellcheck disable=SC2046
+    run_container \
+        $(tty_flags) \
+        "${IMAGE_REF}" info ${json_mode}
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: shell
+# ---------------------------------------------------------------------------
+
+do_shell() {
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    run_container \
+        -i -t \
+        "${IMAGE_REF}" shell
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: copy
+# ---------------------------------------------------------------------------
+
+do_copy() {
+    local src="" dest=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -*) die "Unknown copy option: ${1}" ;;
+            *)
+                if [[ -z "${src}" ]]; then
+                    src="${1}"
+                elif [[ -z "${dest}" ]]; then
+                    dest="${1}"
+                else
+                    die "Unexpected argument: ${1}"
+                fi ;;
+        esac
+        shift
+    done
+
+    [[ -n "${src}" ]]  || die "copy requires <src-path>"
+    [[ -n "${dest}" ]] || die "copy requires <dest>"
+    [[ "${src}" == /* ]] || die "<src-path> must be absolute (start with /)"
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    local out_dir out_name
+    # Resolve host-side output directory; create if needed
+    out_dir="$(cd "$(dirname "${dest}")" 2>/dev/null && pwd \
+               || { mkdir -p "$(dirname "${dest}")" && \
+                    cd "$(dirname "${dest}")" && pwd; })"
+    out_name="$(basename "${dest}")"
+
+    run_container \
+        -v "${out_dir}:/out" \
+        $(tty_flags) \
+        "${IMAGE_REF}" copy "${src}" "${out_name}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: run
+# ---------------------------------------------------------------------------
+
+do_run() {
+    # Consume any flags before the first non-flag or --
+    while [[ $# -gt 0 && "${1}" != "--" ]]; do
+        case "${1}" in
+            -*) die "Unknown run option: ${1} (use -- to separate flags from command)" ;;
+            *) break ;;
+        esac
+        shift
+    done
+    [[ "${1:-}" == "--" ]] && shift
+
+    [[ $# -gt 0 ]] || die "run requires a command after [--]"
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    # Rewrite leading-/ arguments to /mnt/part<path>
+    local rewritten=()
+    for arg in "$@"; do
+        if [[ "${arg}" == /* ]]; then
+            rewritten+=("/mnt/part${arg}")
+        else
+            rewritten+=("${arg}")
+        fi
+    done
+
+    # shellcheck disable=SC2046
+    run_container \
+        $(tty_flags) \
+        "${IMAGE_REF}" run "${rewritten[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: diff
+# ---------------------------------------------------------------------------
+
+do_diff() {
+    local img_path="" ref_path=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -*) die "Unknown diff option: ${1}" ;;
+            *)
+                if [[ -z "${img_path}" ]]; then
+                    img_path="${1}"
+                elif [[ -z "${ref_path}" ]]; then
+                    ref_path="${1}"
+                else
+                    die "Unexpected argument: ${1}"
+                fi ;;
+        esac
+        shift
+    done
+
+    [[ -n "${img_path}" ]] || die "diff requires <image-path>"
+    [[ -n "${ref_path}" ]] || die "diff requires <ref-path>"
+    [[ "${img_path}" == /* ]] || die "<image-path> must be absolute (start with /)"
+    [[ -e "${ref_path}" ]] || die "Reference path not found: ${ref_path}"
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    local ref_dir ref_name
+    ref_dir="$(cd "$(dirname "${ref_path}")" && pwd)"
+    ref_name="$(basename "${ref_path}")"
+
+    # shellcheck disable=SC2046
+    run_container \
+        -v "${ref_dir}:/ref:ro" \
+        $(tty_flags) \
+        "${IMAGE_REF}" diff "${img_path}" "${ref_name}"
+    # diff exit code propagates: 0=same, 1=different, 2=error
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing (global options + subcommand dispatch)
+# ---------------------------------------------------------------------------
+
+usage() {
+    sed -n '/^# SYNOPSIS/,/^# EXAMPLES/{ /^#$/d; s/^# //; p }' \
+        "${BASH_SOURCE[0]}"
+}
+
+print_version() {
+    local ver="(unknown)"
+    if [[ -f "${REPO_ROOT}/version.txt" ]]; then
+        ver="$(cat "${REPO_ROOT}/version.txt")"
+    fi
+    echo "usb-explore ${ver}  image=${IMAGE_REF}"
+}
+
+SUBCOMMAND=""
+
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -i|--image)
+            [[ -n "${2:-}" ]] || die "--image requires a path"
+            IMAGE_FILE="${2}"; shift ;;
+        -p|--partition)
+            [[ -n "${2:-}" ]] || die "--partition requires a number"
+            PARTITION="${2}"; shift ;;
+        --debug)     DEBUG=true ;;
+        --version)   print_version; exit 0 ;;
+        --help|-h)   usage; exit 0 ;;
+        build|capture|info|shell|copy|run|diff)
+            SUBCOMMAND="${1}"; shift; break ;;
+        -*)
+            die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
+        *)
+            die "Unknown subcommand: ${1}. Run 'usb-explore --help' for usage." ;;
+    esac
+    shift
+done
+
+[[ -n "${SUBCOMMAND}" ]] || { usage; exit 2; }
+
+case "${SUBCOMMAND}" in
+    build)   do_build   "$@" ;;
+    capture) do_capture "$@" ;;
+    info)    do_info    "$@" ;;
+    shell)   do_shell   "$@" ;;
+    copy)    do_copy    "$@" ;;
+    run)     do_run     "$@" ;;
+    diff)    do_diff    "$@" ;;
+esac
