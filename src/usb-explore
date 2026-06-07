@@ -230,13 +230,16 @@ run_container() {
     docker "${docker_args[@]}"
 }
 
-# tty_flags — emit -i -t when both stdin and stdout are terminals.
-# Args: none; writes flags to stdout
-tty_flags() {
-    local flags=(-i)
-    [[ -t 0 && -t 1 ]] && flags+=(-t)
-    echo "${flags[@]}"
+# set_tty_flags — populate TTY_FLAGS array with -i and optionally -t.
+# Allocates -t only when both stdin and stdout are terminals so the tool
+# works correctly in pipelines and CI environments.
+# Args: none; sets global TTY_FLAGS
+set_tty_flags() {
+    TTY_FLAGS=(-i)
+    [[ -t 0 && -t 1 ]] && TTY_FLAGS+=(-t)
 }
+
+TTY_FLAGS=(-i)   # default; updated by set_tty_flags before each container call
 
 # ---------------------------------------------------------------------------
 # Subcommand: build
@@ -382,10 +385,10 @@ do_info() {
     check_docker
     check_image_file
     ensure_image
+    set_tty_flags
 
-    # shellcheck disable=SC2046
     run_container \
-        $(tty_flags) \
+        "${TTY_FLAGS[@]}" \
         "${IMAGE_REF}" info ${json_mode}
 }
 
@@ -433,6 +436,7 @@ do_copy() {
     check_image_file
     ensure_image
     resolve_partition
+    set_tty_flags
 
     local out_dir out_name
     # Resolve host-side output directory; create if needed
@@ -443,7 +447,7 @@ do_copy() {
 
     run_container \
         -v "${out_dir}:/out" \
-        $(tty_flags) \
+        "${TTY_FLAGS[@]}" \
         "${IMAGE_REF}" copy "${src}" "${out_name}"
 }
 
@@ -468,6 +472,7 @@ do_run() {
     check_image_file
     ensure_image
     resolve_partition
+    set_tty_flags
 
     # Rewrite leading-/ arguments to /mnt/part<path>
     local rewritten=()
@@ -479,9 +484,8 @@ do_run() {
         fi
     done
 
-    # shellcheck disable=SC2046
     run_container \
-        $(tty_flags) \
+        "${TTY_FLAGS[@]}" \
         "${IMAGE_REF}" run "${rewritten[@]}"
 }
 
@@ -515,15 +519,15 @@ do_diff() {
     check_image_file
     ensure_image
     resolve_partition
+    set_tty_flags
 
     local ref_dir ref_name
     ref_dir="$(cd "$(dirname "${ref_path}")" && pwd)"
     ref_name="$(basename "${ref_path}")"
 
-    # shellcheck disable=SC2046
     run_container \
         -v "${ref_dir}:/ref:ro" \
-        $(tty_flags) \
+        "${TTY_FLAGS[@]}" \
         "${IMAGE_REF}" diff "${img_path}" "${ref_name}"
     # diff exit code propagates: 0=same, 1=different, 2=error
 }

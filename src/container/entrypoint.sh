@@ -1,24 +1,16 @@
 #!/usr/bin/env bash
-# Container PID 1: attach disk image to a loop device, dispatch subcommand,
-# guarantee cleanup regardless of how the container exits.
+# Container PID 1: validate /disk.img and hand off to dispatch.
+# All loop-device lifecycle management lives in dispatch.sh so that the
+# EXIT trap and cleanup are in the same process that opens the devices.
 set -euo pipefail
+
+if [[ ! -f /disk.img ]]; then
+    echo "error: /disk.img not found." >&2
+    echo "       Mount a disk image with: -v /path/to/image:/disk.img:ro" >&2
+    exit 1
+fi
 
 SUBCOMMAND="${1:-info}"
 shift || true
 
-# Attach the disk image read-only with partition scanning (-P creates
-# /dev/loop0p1, /dev/loop0p2, … for each partition automatically).
-LOOP=$(losetup --find)
-losetup --read-only --partscan "${LOOP}" /disk.img
-
-# Guaranteed cleanup: unmount and detach the loop device on any exit path,
-# including normal exit, error, Ctrl-C, and docker stop (SIGTERM).
-cleanup() {
-    local rc=$?
-    umount /mnt/part 2>/dev/null || true
-    losetup --detach "${LOOP}" 2>/dev/null || true
-    exit "${rc}"
-}
-trap cleanup EXIT INT TERM
-
-exec /usr/local/lib/usb-explore/dispatch.sh "${LOOP}" "${SUBCOMMAND}" "$@"
+exec /usr/local/lib/usb-explore/dispatch.sh "${SUBCOMMAND}" "$@"

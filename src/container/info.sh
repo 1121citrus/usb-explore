@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Partition discovery: read the disk image via sfdisk + blkid and emit
-# either a human-readable table or JSON, depending on the first argument.
+# Partition discovery: read the disk image via sfdisk + blkid --probe and
+# emit either a human-readable table or JSON.
+#
+# Uses sfdisk directly on /disk.img for the partition table, then
+# blkid --probe --offset for per-partition filesystem detection.
+# Neither step requires a loop device, avoiding loop pool exhaustion
+# in Docker VMs where most loop slots are occupied by overlay layers.
 set -euo pipefail
 
-LOOP="${1}"
-JSON_MODE="${2:-}"
-
-SECTOR_SIZE=512
+JSON_MODE="${1:-}"
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Format a byte count as a human-readable string (e.g. 31138512896 → 29.0 GB).
+# bytes_human — format a byte count as a human-readable string.
 # Args: $1 = bytes (integer)
 # Returns: 0; writes formatted string to stdout
 bytes_human() {
@@ -25,9 +27,9 @@ bytes_human() {
     }'
 }
 
-# Look up the human name for a known GPT partition type GUID.
-# Args: $1 = GUID (upper-case)
-# Returns: 0; writes name to stdout (falls back to "Unknown type")
+# gpt_type_name — human name for a known GPT partition type GUID.
+# Args: $1 = GUID (case-insensitive)
+# Returns: 0; writes name to stdout
 gpt_type_name() {
     case "${1^^}" in
         C12A7328-F81F-11D2-BA4B-00A0C93EC93B) echo "EFI System Partition" ;;
@@ -39,104 +41,90 @@ gpt_type_name() {
     esac
 }
 
-# Determine whether a partition is mountable and, if not, why.
+# classify_partition — set MOUNTABLE and MOUNTABLE_REASON globals.
 # Args: $1 = GPT type GUID or MBR hex type; $2 = blkid TYPE value
-# Sets globals: MOUNTABLE (true/false), MOUNTABLE_REASON (string or "null")
 classify_partition() {
     local type_id="${1^^}" fstype="${2}"
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
 
-    # Exclude by GPT type GUID
     case "${type_id}" in
-        C12A7328-*)
-            MOUNTABLE=false
-            MOUNTABLE_REASON="EFI System Partition excluded"
-            return ;;
-        21686148-*)
-            MOUNTABLE=false
-            MOUNTABLE_REASON="BIOS Boot Partition excluded"
-            return ;;
-        0657FD6D-*)
-            MOUNTABLE=false
-            MOUNTABLE_REASON="Linux swap excluded"
-            return ;;
-        E6D6D379-*)
-            MOUNTABLE=false
-            MOUNTABLE_REASON="LVM physical volume excluded"
-            return ;;
-        # MBR type bytes
-        00|82|8E|EE)
-            MOUNTABLE=false
-            MOUNTABLE_REASON="partition type excluded (${type_id})"
-            return ;;
+        C12A7328-*) MOUNTABLE=false; MOUNTABLE_REASON="EFI System Partition excluded"; return ;;
+        21686148-*) MOUNTABLE=false; MOUNTABLE_REASON="BIOS Boot Partition excluded"; return ;;
+        0657FD6D-*) MOUNTABLE=false; MOUNTABLE_REASON="Linux swap excluded"; return ;;
+        E6D6D379-*) MOUNTABLE=false; MOUNTABLE_REASON="LVM physical volume excluded"; return ;;
+        00|82|8E|EE) MOUNTABLE=false; MOUNTABLE_REASON="partition type excluded (${type_id})"; return ;;
     esac
 
-    # Exclude by filesystem type
     case "${fstype}" in
-        squashfs)
-            MOUNTABLE=false
-            MOUNTABLE_REASON="squashfs not supported in this version"
-            return ;;
-        btrfs)
-            MOUNTABLE=false
-            MOUNTABLE_REASON="btrfs not supported in this version"
-            return ;;
-        swap|"")
-            MOUNTABLE=false
-            MOUNTABLE_REASON="no recognised filesystem"
-            return ;;
+        squashfs) MOUNTABLE=false; MOUNTABLE_REASON="squashfs not supported in this version"; return ;;
+        btrfs)    MOUNTABLE=false; MOUNTABLE_REASON="btrfs not supported in this version"; return ;;
+        swap|"")  MOUNTABLE=false; MOUNTABLE_REASON="no recognised filesystem"; return ;;
     esac
 }
+
+# probe_partition — detect filesystem type using blkid --probe with byte offset.
+# No loop device is created; this avoids loop pool exhaustion in Docker VMs.
+# Args: $1 = byte offset, $2 = byte size, $3 = field (TYPE, LABEL, UUID, etc.)
+# Returns: 0; writes field value to stdout (empty string if not detected)
+probe_partition() {
+    local offset="$1" size="$2" field="$3"
+    blkid --probe \
+        --offset="${offset}" \
+        --size="${size}" \
+        -o value -s "${field}" \
+        /disk.img 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Read partition table
+# ---------------------------------------------------------------------------
+
+SFDISK_JSON=$(sfdisk --json /disk.img 2>/dev/null)
+LABEL=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.label')
+SECTOR_SIZE=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.sectorsize // 512')
+
+IMAGE_SIZE_SECTORS=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.lastlba + 1')
+IMAGE_SIZE_BYTES=$(( IMAGE_SIZE_SECTORS * SECTOR_SIZE ))
+IMAGE_SIZE_HUMAN=$(bytes_human "${IMAGE_SIZE_BYTES}")
 
 # ---------------------------------------------------------------------------
 # Build partition records
 # ---------------------------------------------------------------------------
 
-SFDISK_JSON=$(sfdisk --json "${LOOP}")
-LABEL=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.label')
-SECTOR_SIZE=$(echo "${SFDISK_JSON}" \
-    | jq -r '.partitiontable.sectorsize // 512')
-
-IMAGE_SIZE_SECTORS=$(echo "${SFDISK_JSON}" \
-    | jq -r '.partitiontable.lastlba + 1')
-IMAGE_SIZE_BYTES=$(( IMAGE_SIZE_SECTORS * SECTOR_SIZE ))
-IMAGE_SIZE_HUMAN=$(bytes_human "${IMAGE_SIZE_BYTES}")
-
-# Build a JSON array of partition records
 PARTITIONS_JSON="[]"
-PART_NUM=0
+PART_COUNT=$(echo "${SFDISK_JSON}" | jq '.partitiontable.partitions | length')
 
-while IFS= read -r part_json; do
-    PART_NUM=$(( PART_NUM + 1 ))
-    NODE=$(echo "${part_json}"   | jq -r '.node')
-    START=$(echo "${part_json}"  | jq -r '.start')
-    SIZE_S=$(echo "${part_json}" | jq -r '.size')
-    TYPE=$(echo "${part_json}"   | jq -r '.type // "00"')
-    NAME=$(echo "${part_json}"   | jq -r '.name // ""')
+for (( idx=0; idx<PART_COUNT; idx++ )); do
+    PART_NUM=$(( idx + 1 ))
+    PART_JSON=$(echo "${SFDISK_JSON}" | jq -c ".partitiontable.partitions[${idx}]")
+
+    NODE=$(echo "${PART_JSON}"  | jq -r '.node')
+    START=$(echo "${PART_JSON}" | jq -r '.start')
+    SIZE_S=$(echo "${PART_JSON}"| jq -r '.size')
+    TYPE=$(echo "${PART_JSON}"  | jq -r '.type // "00"')
 
     SIZE_BYTES=$(( SIZE_S * SECTOR_SIZE ))
     SIZE_HUMAN=$(bytes_human "${SIZE_BYTES}")
+    OFFSET=$(( START * SECTOR_SIZE ))
 
-    # Enrich with filesystem data from blkid
-    FSTYPE=$(blkid -o value -s TYPE  "${NODE}" 2>/dev/null || echo "")
-    FS_LABEL=$(blkid -o value -s LABEL "${NODE}" 2>/dev/null || echo "")
-    UUID=$(blkid -o value -s UUID   "${NODE}" 2>/dev/null || echo "")
+    # Probe filesystem metadata directly from the image file at the
+    # partition's byte offset — no loop device required.
+    FSTYPE=$(probe_partition "${OFFSET}" "${SIZE_BYTES}" "TYPE")
+    FS_LABEL=$(probe_partition "${OFFSET}" "${SIZE_BYTES}" "LABEL")
+    UUID=$(probe_partition "${OFFSET}" "${SIZE_BYTES}" "UUID")
     UUID_SHORT="${UUID:0:8}"
 
-    # Determine type name for display
     if [[ "${LABEL}" == "gpt" ]]; then
         TYPE_NAME=$(gpt_type_name "${TYPE}")
     else
         TYPE_NAME="MBR type 0x${TYPE}"
     fi
 
-    # Classify mountability
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
     classify_partition "${TYPE}" "${FSTYPE}"
 
-    # Append record to JSON array
     RECORD=$(jq -n \
         --argjson num    "${PART_NUM}" \
         --arg     node   "${NODE}" \
@@ -166,15 +154,12 @@ while IFS= read -r part_json; do
             uuid:             $uuid,
             uuid_short:       $uuid_s,
             mountable:        $mount,
-            mountable_reason: (if $mreason == "null" then null
-                               else $mreason end)
+            mountable_reason: (if $mreason == "null" then null else $mreason end)
         }')
 
     PARTITIONS_JSON=$(echo "${PARTITIONS_JSON}" \
         | jq --argjson r "${RECORD}" '. + [$r]')
-
-done < <(echo "${SFDISK_JSON}" \
-    | jq -c '.partitiontable.partitions[]')
+done
 
 FULL_JSON=$(jq -n \
     --arg     image   "/disk.img" \
@@ -199,7 +184,6 @@ if [[ "${JSON_MODE}" == "--json" ]]; then
     exit 0
 fi
 
-# Human-readable table
 MOUNTABLE_COUNT=$(echo "${FULL_JSON}" \
     | jq '[.partitions[] | select(.mountable == true)] | length')
 
@@ -229,14 +213,12 @@ done < <(echo "${FULL_JSON}" | jq -c '.partitions[]')
 
 echo ""
 case "${MOUNTABLE_COUNT}" in
-    0)
-        echo "No mountable partitions found." ;;
+    0) echo "No mountable partitions found." ;;
     1)
         P=$(echo "${FULL_JSON}" \
             | jq -r '[.partitions[] | select(.mountable==true)][0].number')
-        echo "1 mountable partition (partition ${P})." \
-             "Omit -p to auto-select." ;;
+        printf "1 mountable partition (partition %s). Omit -p to auto-select.\n" "${P}" ;;
     *)
-        echo "${MOUNTABLE_COUNT} mountable partitions found." \
-             "Pass -p N to select one." ;;
+        printf "%s mountable partitions found. Pass -p N to select one.\n" \
+            "${MOUNTABLE_COUNT}" ;;
 esac

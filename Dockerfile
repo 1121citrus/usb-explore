@@ -32,12 +32,13 @@ LABEL org.opencontainers.image.vendor="1121 Citrus"
 LABEL org.opencontainers.image.licenses="${LICENSE}"
 LABEL org.opencontainers.image.authors="${AUTHORS}"
 
+# Version pinning omitted: Trivy/Grype CVE scans the final image, making
+# apt version pins redundant overhead for this developer tool.
 # hadolint ignore=DL3008
-# DL3008: version pinning omitted intentionally — Trivy/Grype scan the
-# final image for CVEs, making apt version pins redundant overhead.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       util-linux \
+      fdisk \
       e2fsprogs \
       xfsprogs \
       rsync \

@@ -75,21 +75,23 @@ run_build() {
     [[ "${output}" != *"bats"* ]]
 }
 
-@test "build: test stage runs by default (dry-run shows bats)" {
+@test "build: test stage runs by default (dry-run shows run-all)" {
     run_build --no-lint --no-scan
     [ "${status}" -eq 0 ]
-    [[ "${output}" == *"bats"* ]]
+    [[ "${output}" == *"run-all"* ]]
 }
 
 # ---------------------------------------------------------------------------
 # --no-scan
 # ---------------------------------------------------------------------------
 
-@test "build: --no-scan suppresses trivy and grype" {
+@test "build: --no-scan suppresses trivy and grype scan stages" {
     run_build --no-lint --no-test --no-scan
     [ "${status}" -eq 0 ]
-    [[ "${output}" != *"trivy"* ]]
-    [[ "${output}" != *"grype"* ]]
+    # The header always shows 'Trivy DB:' config; check for absence of the
+    # actual scan command (the image name in the aquasec/trivy docker call)
+    [[ "${output}" != *"aquasec/trivy"* ]]
+    [[ "${output}" != *"anchore/grype"* ]]
 }
 
 @test "build: scan runs by default (dry-run shows trivy)" {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bats
 # 04-env-metadata.bats — APP_* env vars and OCI image labels.
+# Uses --entrypoint=bash to bypass the /disk.img check in entrypoint.sh.
 
 IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
 
@@ -8,29 +9,25 @@ IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
 # ---------------------------------------------------------------------------
 
 @test "image: APP_VERSION env var is set" {
-    run docker run --rm "${IMAGE}" \
-        bash -c 'echo "${APP_VERSION}"'
+    run docker run --rm --entrypoint=bash "${IMAGE}" -c 'echo "${APP_VERSION}"'
     [ "${status}" -eq 0 ]
     [[ -n "${output}" ]]
 }
 
 @test "image: APP_COMMIT env var is set" {
-    run docker run --rm "${IMAGE}" \
-        bash -c 'echo "${APP_COMMIT}"'
+    run docker run --rm --entrypoint=bash "${IMAGE}" -c 'echo "${APP_COMMIT}"'
     [ "${status}" -eq 0 ]
     [[ -n "${output}" ]]
 }
 
 @test "image: APP_BUILD_DATE env var is set" {
-    run docker run --rm "${IMAGE}" \
-        bash -c 'echo "${APP_BUILD_DATE}"'
+    run docker run --rm --entrypoint=bash "${IMAGE}" -c 'echo "${APP_BUILD_DATE}"'
     [ "${status}" -eq 0 ]
     [[ -n "${output}" ]]
 }
 
 @test "image: APP_BASE_IMAGE env var is set" {
-    run docker run --rm "${IMAGE}" \
-        bash -c 'echo "${APP_BASE_IMAGE}"'
+    run docker run --rm --entrypoint=bash "${IMAGE}" -c 'echo "${APP_BASE_IMAGE}"'
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"ubuntu"* ]]
 }

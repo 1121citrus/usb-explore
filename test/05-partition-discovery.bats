@@ -1,16 +1,24 @@
 #!/usr/bin/env bats
 # 05-partition-discovery.bats — partition discovery, mountability, and
-# auto-selection logic.  All tests that use fixtures skip gracefully when
-# the fixture images are absent.
+# auto-selection logic.
+#
+# jq is run inside the usb-explore container (bats host may not have it).
+# All tests skip gracefully when fixture images are absent.
 
 IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
 FIXTURES="${BATS_TEST_DIRNAME}/../fixtures"
 
-# Run info --json on a fixture and return the JSON
+# jq_from_json — pipe JSON through jq inside the usb-explore container.
+# Args: $1 = JSON string, $2 = jq filter
+jq_from_json() {
+    echo "$1" | docker run --rm -i --entrypoint=jq "${IMAGE}" -r "$2"
+}
+
+# info_json — run info --json on a fixture and return JSON.
+# Args: $1 = fixture filename (basename in FIXTURES dir)
 info_json() {
-    local img="${1}"
     docker run --rm --privileged \
-        -v "${FIXTURES}/${img}:/disk.img:ro" \
+        -v "${FIXTURES}/${1}:/disk.img:ro" \
         "${IMAGE}" info --json
 }
 
@@ -22,7 +30,7 @@ info_json() {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     local json count
     json=$(info_json single-ext4.img)
-    count=$(echo "${json}" | jq '.partitions | length')
+    count=$(jq_from_json "${json}" '.partitions | length')
     [ "${count}" -eq 2 ]
 }
 
@@ -30,7 +38,7 @@ info_json() {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     local json count
     json=$(info_json single-ext4.img)
-    count=$(echo "${json}" | jq '[.partitions[] | select(.mountable == true)] | length')
+    count=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)] | length')
     [ "${count}" -eq 1 ]
 }
 
@@ -38,8 +46,7 @@ info_json() {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     local json mountable
     json=$(info_json single-ext4.img)
-    mountable=$(echo "${json}" \
-        | jq -r '.partitions[] | select(.number == 1) | .mountable')
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .mountable')
     [ "${mountable}" = "false" ]
 }
 
@@ -47,10 +54,8 @@ info_json() {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     local json fstype mountable
     json=$(info_json single-ext4.img)
-    fstype=$(echo "${json}" \
-        | jq -r '.partitions[] | select(.number == 2) | .fstype')
-    mountable=$(echo "${json}" \
-        | jq -r '.partitions[] | select(.number == 2) | .mountable')
+    fstype=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .fstype')
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .mountable')
     [ "${fstype}" = "ext4" ]
     [ "${mountable}" = "true" ]
 }
@@ -59,36 +64,34 @@ info_json() {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
     local json
     json=$(info_json single-ext4.img)
-    echo "${json}" | jq -e '.image'          >/dev/null
-    echo "${json}" | jq -e '.size_bytes'     >/dev/null
-    echo "${json}" | jq -e '.size_human'     >/dev/null
-    echo "${json}" | jq -e '.label'          >/dev/null
-    echo "${json}" | jq -e '.partitions'     >/dev/null
+    jq_from_json "${json}" '.image'      >/dev/null
+    jq_from_json "${json}" '.size_bytes' >/dev/null
+    jq_from_json "${json}" '.size_human' >/dev/null
+    jq_from_json "${json}" '.label'      >/dev/null
+    jq_from_json "${json}" '.partitions' >/dev/null
 }
 
 @test "discovery: each partition record has required keys" {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    local json
+    local json part
     json=$(info_json single-ext4.img)
-    # Check the second partition (the ext4 one)
-    local part
-    part=$(echo "${json}" | jq '.partitions[] | select(.number == 2)')
-    echo "${part}" | jq -e '.node'             >/dev/null
-    echo "${part}" | jq -e '.size_bytes'       >/dev/null
-    echo "${part}" | jq -e '.size_human'       >/dev/null
-    echo "${part}" | jq -e '.fstype'           >/dev/null
-    echo "${part}" | jq -e '.mountable'        >/dev/null
+    part=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | @json')
+    jq_from_json "${part}" '.node'      >/dev/null
+    jq_from_json "${part}" '.size_bytes' >/dev/null
+    jq_from_json "${part}" '.size_human' >/dev/null
+    jq_from_json "${part}" '.fstype'    >/dev/null
+    jq_from_json "${part}" '.mountable' >/dev/null
 }
 
 # ---------------------------------------------------------------------------
-# dual-ext4.img — auto-selection must refuse and print the table
+# dual-ext4.img
 # ---------------------------------------------------------------------------
 
 @test "discovery: dual-ext4.img has 2 mountable partitions" {
     [[ -f "${FIXTURES}/dual-ext4.img" ]] || skip "fixture not generated"
     local json count
     json=$(info_json dual-ext4.img)
-    count=$(echo "${json}" | jq '[.partitions[] | select(.mountable == true)] | length')
+    count=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)] | length')
     [ "${count}" -eq 2 ]
 }
 
@@ -100,8 +103,7 @@ info_json() {
     [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture not generated"
     local json fstype
     json=$(info_json xfs.img)
-    fstype=$(echo "${json}" \
-        | jq -r '[.partitions[] | select(.mountable == true)][0].fstype')
+    fstype=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)][0].fstype')
     [ "${fstype}" = "xfs" ]
 }
 
@@ -113,7 +115,7 @@ info_json() {
     [[ -f "${FIXTURES}/mbr.img" ]] || skip "fixture not generated"
     local json label
     json=$(info_json mbr.img)
-    label=$(echo "${json}" | jq -r '.label')
+    label=$(jq_from_json "${json}" '.label')
     [ "${label}" = "dos" ]
 }
 
@@ -121,8 +123,8 @@ info_json() {
     [[ -f "${FIXTURES}/mbr.img" ]] || skip "fixture not generated"
     local json count fstype
     json=$(info_json mbr.img)
-    count=$(echo "${json}" | jq '[.partitions[] | select(.mountable == true)] | length')
-    fstype=$(echo "${json}" | jq -r '[.partitions[] | select(.mountable == true)][0].fstype')
+    count=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)] | length')
+    fstype=$(jq_from_json "${json}" '[.partitions[] | select(.mountable == true)][0].fstype')
     [ "${count}" -eq 1 ]
     [ "${fstype}" = "ext4" ]
 }

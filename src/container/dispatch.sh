@@ -1,48 +1,114 @@
 #!/usr/bin/env bash
-# Route a subcommand to its handler. Called by entrypoint.sh after the
-# loop device has been attached. Responsible for partition mounting and
-# delegating to the appropriate operation.
+# Route a subcommand to its handler.
+# Manages all loop-device lifecycle: opens, mounts, and guarantees cleanup
+# via a single EXIT trap so no devices are leaked regardless of exit path.
+#
+# Partition access uses per-partition loop devices created from sfdisk byte
+# offsets. This avoids relying on losetup --partscan, which is unreliable
+# inside Docker VMs on macOS.
 set -euo pipefail
 
-LOOP="${1}"
-SUBCOMMAND="${2}"
-shift 2
+SUBCOMMAND="${1}"
+shift
 
-# Source all filesystem drivers. Each driver registers three functions:
-#   <name>_detect <node>        – returns 0 if this driver handles the FS
-#   <name>_mount  <node> <mp>   – mounts the partition read-only
-#   <name>_unmount <mp>         – best-effort unmount
+# Source filesystem drivers
 DRIVER_DIR="/usr/local/lib/usb-explore/drivers"
-for _drv in "${DRIVER_DIR}"/ext.sh "${DRIVER_DIR}"/xfs.sh \
-            "${DRIVER_DIR}"/vfat.sh; do
-    # shellcheck source=/dev/null
-    source "${_drv}"
-done
-
-# Future drivers are added here:
-# FS_DRIVERS=(ext xfs vfat squashfs btrfs)
+# shellcheck source=/dev/null
+for _drv in "${DRIVER_DIR}"/*.sh; do source "${_drv}"; done
 FS_DRIVERS=(ext xfs vfat)
 
 # ---------------------------------------------------------------------------
-# Partition mount / unmount helpers
+# Loop device tracking (populated by attach_partition)
 # ---------------------------------------------------------------------------
 
-# Find the driver for a partition node and mount it.
-# Args:   $1 = partition node (e.g. /dev/loop0p2), $2 = mountpoint
-# Returns: 0 on success; exits with code 5 on unsupported filesystem
+PART_LOOP=""    # partition-specific loop device, set by attach_partition
+
+cleanup() {
+    local rc=$?
+    umount /mnt/part 2>/dev/null || true
+    [[ -n "${PART_LOOP}" ]] && losetup --detach "${PART_LOOP}" 2>/dev/null || true
+    exit "${rc}"
+}
+trap cleanup EXIT INT TERM
+
+# ---------------------------------------------------------------------------
+# Partition loop helpers
+# ---------------------------------------------------------------------------
+
+# attach_partition — create a read-only loop device for one partition.
+# Uses sfdisk byte-offset arithmetic so no kernel partition-scan is needed.
+# Args:   $1 = 1-based partition number
+# Side effect: sets global PART_LOOP
+# Returns: 0 on success; exits 5 on out-of-range partition number
+attach_partition() {
+    local partnum="${1}"
+    local sfdisk_json sector_size n_parts start size
+
+    sfdisk_json=$(sfdisk --json /disk.img 2>/dev/null)
+    sector_size=$(echo "${sfdisk_json}" | jq -r '.partitiontable.sectorsize // 512')
+    n_parts=$(echo "${sfdisk_json}" | jq '.partitiontable.partitions | length')
+
+    if [[ "${partnum}" -lt 1 || "${partnum}" -gt "${n_parts}" ]]; then
+        echo "error: partition ${partnum} does not exist" \
+             "(image has ${n_parts} partitions)." >&2
+        echo "       Run 'usb-explore info' to see the partition table." >&2
+        exit 5
+    fi
+
+    start=$(echo "${sfdisk_json}" \
+        | jq -r ".partitiontable.partitions[${partnum}-1].start")
+    size=$(echo "${sfdisk_json}" \
+        | jq -r ".partitiontable.partitions[${partnum}-1].size")
+
+    # Docker Desktop VMs pre-create loop nodes only up to a fixed limit.
+    # When losetup --find returns a node above that limit (e.g. /dev/loop77),
+    # the node doesn't exist in /dev and losetup fails. Pre-create nodes
+    # 67-127 to cover any gap, then attach.
+    local offset sizelimit candidate attempt
+    offset=$(( start * sector_size ))
+    sizelimit=$(( size * sector_size ))
+
+    candidate=$(losetup --find 2>/dev/null || true)
+    if [[ -n "${candidate}" && ! -b "${candidate}" ]]; then
+        local num="${candidate#/dev/loop}"
+        mknod "${candidate}" b 7 "${num}" 2>/dev/null || true
+    fi
+
+    for attempt in 1 2 3 4 5; do
+        PART_LOOP=$(losetup --find --show --read-only \
+            --offset="${offset}" \
+            --sizelimit="${sizelimit}" \
+            /disk.img 2>/dev/null) && break
+        [[ "${attempt}" -lt 5 ]] || {
+            echo "error: no loop device available after ${attempt} attempts." >&2
+            exit 5
+        }
+        # Allow any just-exited container to release its loop device
+        sleep "0.${attempt}"
+        candidate=$(losetup --find 2>/dev/null || true)
+        if [[ -n "${candidate}" && ! -b "${candidate}" ]]; then
+            local num="${candidate#/dev/loop}"
+            mknod "${candidate}" b 7 "${num}" 2>/dev/null || true
+        fi
+    done
+}
+
+# mount_partition — attach and mount the selected partition read-only.
+# Reads USB_PARTITION from the environment.
+# Returns: 0 on success; exits 5 on unsupported or unrecognised filesystem
 mount_partition() {
-    local node="${1}" mp="${2}"
+    attach_partition "${USB_PARTITION:?USB_PARTITION is not set}"
+
     local fstype
-    fstype=$(blkid -o value -s TYPE "${node}" 2>/dev/null || echo "unknown")
+    fstype=$(blkid -o value -s TYPE "${PART_LOOP}" 2>/dev/null || echo "unknown")
 
     for drv in "${FS_DRIVERS[@]}"; do
-        if "${drv}_detect" "${node}"; then
-            "${drv}_mount" "${node}" "${mp}"
+        if "${drv}_detect" "${PART_LOOP}"; then
+            "${drv}_mount" "${PART_LOOP}" /mnt/part
             return 0
         fi
     done
 
-    # No driver matched — emit a helpful error
     case "${fstype}" in
         squashfs)
             echo "error: squashfs is not supported in this version." >&2
@@ -50,7 +116,7 @@ mount_partition() {
         btrfs)
             echo "error: btrfs is not supported in this version." >&2 ;;
         unknown|"")
-            echo "error: partition ${USB_PARTITION:-?} contains no" >&2
+            echo "error: partition ${USB_PARTITION} contains no" >&2
             echo "       recognised filesystem." >&2 ;;
         *)
             echo "error: no driver found for filesystem '${fstype}'." >&2 ;;
@@ -63,7 +129,7 @@ mount_partition() {
 # ---------------------------------------------------------------------------
 
 do_info() {
-    exec /usr/local/lib/usb-explore/info.sh "${LOOP}" "$@"
+    exec /usr/local/lib/usb-explore/info.sh "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -71,8 +137,7 @@ do_info() {
 # ---------------------------------------------------------------------------
 
 do_shell() {
-    local node="${LOOP}p${USB_PARTITION}"
-    mount_partition "${node}" /mnt/part
+    mount_partition
     export PS1="(usb-explore p${USB_PARTITION}) \w \$ "
     cd /mnt/part
     exec bash --norc --noprofile
@@ -82,34 +147,34 @@ do_shell() {
 # Subcommand: copy
 # ---------------------------------------------------------------------------
 
-# Args (passed by host wrapper via container argv):
-#   $1 = source path (absolute within the partition, e.g. /etc/fstab)
-#   $2 = destination name within /out/
 do_copy() {
     local src="${1}" dst_name="${2}"
-    local node="${LOOP}p${USB_PARTITION}"
-    mount_partition "${node}" /mnt/part
+    mount_partition
 
     local src_abs="/mnt/part/${src#/}"
-    local dst_abs="/out/${dst_name}"
-
     if [[ ! -e "${src_abs}" ]]; then
         echo "error: path not found in image: ${src}" >&2
         exit 1
     fi
 
-    rsync -a --no-owner --no-group "${src_abs}" "${dst_abs}"
+    # Trailing slash on source dir copies its CONTENTS into dest, avoiding
+    # the rsync "copy-into" behaviour that would create dest/basename/.
+    if [[ -d "${src_abs}" ]]; then
+        mkdir -p "/out/${dst_name}"
+        rsync -a --no-owner --no-group "${src_abs}/" "/out/${dst_name}/"
+    else
+        rsync -a --no-owner --no-group "${src_abs}" "/out/${dst_name}"
+    fi
 }
 
 # ---------------------------------------------------------------------------
 # Subcommand: run
 # ---------------------------------------------------------------------------
 
-# Args: command and arguments, with leading '/' paths rewritten to
+# Args: command and arguments, with leading / paths already rewritten to
 # /mnt/part/<path> by the host wrapper before being passed in.
 do_run() {
-    local node="${LOOP}p${USB_PARTITION}"
-    mount_partition "${node}" /mnt/part
+    mount_partition
     exec "$@"
 }
 
@@ -117,24 +182,18 @@ do_run() {
 # Subcommand: diff
 # ---------------------------------------------------------------------------
 
-# Args:
-#   $1 = image path (absolute within the partition)
-#   $2 = reference name within /ref/
 do_diff() {
     local img_path="${1}" ref_name="${2}"
-    local node="${LOOP}p${USB_PARTITION}"
-    mount_partition "${node}" /mnt/part
+    mount_partition
 
     local img_abs="/mnt/part/${img_path#/}"
-    local ref_abs="/ref/${ref_name}"
-
     if [[ ! -e "${img_abs}" ]]; then
         echo "error: path not found in image: ${img_path}" >&2
         exit 1
     fi
 
-    # Exit codes propagate: 0 = identical, 1 = differences, 2 = error
-    diff -rq "${img_abs}" "${ref_abs}"
+    # Exit codes propagate: 0=identical, 1=differences, 2=error
+    diff -rq "${img_abs}" "/ref/${ref_name}"
 }
 
 # ---------------------------------------------------------------------------

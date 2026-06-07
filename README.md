@@ -81,7 +81,7 @@ on first use.
 
 ### `capture` — copy a USB drive to a disk image
 
-```
+```text
 usb-explore capture <device> [options]
 ```
 
@@ -112,7 +112,7 @@ take 15–30 minutes. You can unplug the drive when it finishes.
 
 ### `info` — show the partition table
 
-```
+```text
 usb-explore info [-i usb.img] [--json]
 ```
 
@@ -122,7 +122,7 @@ drive before deciding which partition to explore.
 
 **Example output:**
 
-```
+```text
 Image:  usb.img  (29.8 GB)
 Scheme: GPT
 
@@ -139,7 +139,7 @@ Scheme: GPT
 
 ### `shell` — browse interactively
 
-```
+```text
 usb-explore shell [-i usb.img] [-p N]
 ```
 
@@ -161,7 +161,7 @@ The partition is mounted **read-only**. You cannot modify the image.
 
 ### `copy` — copy files out of the image
 
-```
+```text
 usb-explore copy [-i usb.img] [-p N] <src-path> <dest>
 ```
 
@@ -180,7 +180,7 @@ usb-explore copy /etc ./etc-backup
 
 ### `run` — run a command against the image
 
-```
+```text
 usb-explore run [-i usb.img] [-p N] [--] <command> [args…]
 ```
 
@@ -203,7 +203,7 @@ usb-explore run -- cat /etc/os-release | grep VERSION
 
 ### `diff` — compare the image against a local reference
 
-```
+```text
 usb-explore diff [-i usb.img] [-p N] <image-path> <reference-path>
 ```
 
@@ -222,7 +222,7 @@ usb-explore diff /etc/fstab ./expected-fstab
 
 ### `build` — rebuild the Docker image from source
 
-```
+```text
 usb-explore build [--no-cache]
 ```
 

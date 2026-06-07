@@ -1,45 +1,52 @@
 #!/usr/bin/env bats
 # 02-image-structure.bats — verify Docker image structure and contents.
+# Uses --entrypoint=bash to bypass the /disk.img check in entrypoint.sh.
 # Requires IMAGE env var (e.g. 1121citrus/usb-explore:dev-latest).
 
 IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
+
+# Run a command inside the image, bypassing the entrypoint.
+# Args: command and arguments
+run_in_image() {
+    docker run --rm --entrypoint=bash "${IMAGE}" -c "$*"
+}
 
 # ---------------------------------------------------------------------------
 # Required binaries
 # ---------------------------------------------------------------------------
 
 @test "image: losetup is present" {
-    run docker run --rm "${IMAGE}" which losetup
+    run run_in_image 'command -v losetup || ls /usr/sbin/losetup'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: blkid is present" {
-    run docker run --rm "${IMAGE}" which blkid
+    run run_in_image 'command -v blkid || ls /usr/sbin/blkid'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: sfdisk is present" {
-    run docker run --rm "${IMAGE}" which sfdisk
+    run run_in_image 'command -v sfdisk || ls /usr/sbin/sfdisk'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: rsync is present" {
-    run docker run --rm "${IMAGE}" which rsync
+    run run_in_image 'command -v rsync'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: diff is present" {
-    run docker run --rm "${IMAGE}" which diff
+    run run_in_image 'command -v diff'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: jq is present" {
-    run docker run --rm "${IMAGE}" which jq
+    run run_in_image 'command -v jq'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: bash is present" {
-    run docker run --rm "${IMAGE}" which bash
+    run run_in_image 'command -v bash'
     [ "${status}" -eq 0 ]
 }
 
@@ -48,17 +55,17 @@ IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
 # ---------------------------------------------------------------------------
 
 @test "image: /mnt/part directory exists" {
-    run docker run --rm "${IMAGE}" test -d /mnt/part
+    run run_in_image 'test -d /mnt/part'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: /out directory exists" {
-    run docker run --rm "${IMAGE}" test -d /out
+    run run_in_image 'test -d /out'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: /ref directory exists" {
-    run docker run --rm "${IMAGE}" test -d /ref
+    run run_in_image 'test -d /ref'
     [ "${status}" -eq 0 ]
 }
 
@@ -67,38 +74,32 @@ IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
 # ---------------------------------------------------------------------------
 
 @test "image: entrypoint.sh is installed and executable" {
-    run docker run --rm "${IMAGE}" \
-        test -x /usr/local/lib/usb-explore/entrypoint.sh
+    run run_in_image 'test -x /usr/local/lib/usb-explore/entrypoint.sh'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: info.sh is installed and executable" {
-    run docker run --rm "${IMAGE}" \
-        test -x /usr/local/lib/usb-explore/info.sh
+    run run_in_image 'test -x /usr/local/lib/usb-explore/info.sh'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: dispatch.sh is installed and executable" {
-    run docker run --rm "${IMAGE}" \
-        test -x /usr/local/lib/usb-explore/dispatch.sh
+    run run_in_image 'test -x /usr/local/lib/usb-explore/dispatch.sh'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: drivers/ext.sh is installed and executable" {
-    run docker run --rm "${IMAGE}" \
-        test -x /usr/local/lib/usb-explore/drivers/ext.sh
+    run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/ext.sh'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: drivers/xfs.sh is installed and executable" {
-    run docker run --rm "${IMAGE}" \
-        test -x /usr/local/lib/usb-explore/drivers/xfs.sh
+    run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/xfs.sh'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: drivers/vfat.sh is installed and executable" {
-    run docker run --rm "${IMAGE}" \
-        test -x /usr/local/lib/usb-explore/drivers/vfat.sh
+    run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/vfat.sh'
     [ "${status}" -eq 0 ]
 }
 
@@ -107,9 +108,6 @@ IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
 # ---------------------------------------------------------------------------
 
 @test "image: default CMD is 'info'" {
-    # Without --privileged and /disk.img, the entrypoint will fail trying
-    # to run losetup, but the error message should reference 'info', not
-    # an unknown subcommand. We just verify the CMD is set correctly.
     local cmd
     cmd=$(docker inspect --format '{{json .Config.Cmd}}' "${IMAGE}")
     [[ "${cmd}" == *'"info"'* ]]
