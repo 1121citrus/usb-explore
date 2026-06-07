@@ -322,7 +322,9 @@ do_capture() {
     fi
 
     # Build the dd argument list
-    local dd_args=("if=${raw_device}" "of=${output}" "bs=4m")
+    # bs=4M: uppercase M is accepted by both BSD dd (macOS) and GNU dd
+    # (Homebrew coreutils). Lowercase 4m is BSD-only.
+    local dd_args=("if=${raw_device}" "of=${output}" "bs=4M")
     [[ "${no_sparse}" == false ]] && dd_args+=("conv=sparse")
 
     log "Capturing ${raw_device} → ${output}"
