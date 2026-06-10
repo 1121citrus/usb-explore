@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master, staging]
-    tags: ['v*']
+    tags: ["v*"]
   pull_request:
     branches: [main, master]
 
@@ -11,112 +11,24 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
-env:
-  IMAGE: 1121citrus/usb-explore
+permissions:
+  contents: read
 
 jobs:
-
-  # --------------------------------------------------------------------------
-  # Stage 1: Lint
-  # --------------------------------------------------------------------------
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4.2.2
-
-      - name: hadolint
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: Dockerfile
-          config: .hadolint.yaml
-          # Explicit ignore and threshold: hadolint-action defaults to
-          # failure-threshold=info, overriding .hadolint.yaml settings.
-          failure-threshold: warning
-          ignore: DL3006 DL3008 DL3009
-
-      - name: shellcheck
-        uses: ludeeus/action-shellcheck@2.0.0
-        with:
-          severity: warning
-          additional_files: >-
-            src/usb-explore
-            src/container/entrypoint.sh
-            src/container/info.sh
-            src/container/dispatch.sh
-            src/container/drivers/ext.sh
-            src/container/drivers/xfs.sh
-            src/container/drivers/vfat.sh
-            src/container/drivers/iso9660.sh
-
-      - name: markdownlint
-        uses: DavidAnson/markdownlint-cli2-action@v19
-        with:
-          globs: '**/*.md'
-          config: .markdownlint.json
-
-  # --------------------------------------------------------------------------
-  # Stage 2: Build
-  # --------------------------------------------------------------------------
-  build:
-    name: Build
-    needs: lint
-    uses: 1121citrus/shared-github-workflows/.github/workflows/build.yml@v1
+  ci:
+    uses: 1121citrus/shared-github-workflows/.github/workflows/pipeline.yml@v1
     with:
       image: 1121citrus/usb-explore
-
-  # --------------------------------------------------------------------------
-  # Stage 3: Test
-  # --------------------------------------------------------------------------
-  test:
-    name: Test
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4.2.2
-
-      - name: Download image artifact
-        uses: actions/download-artifact@v4.3.0
-        with:
-          name: docker-image
-          path: /tmp
-
-      - name: Load image
-        run: docker load < /tmp/image.tar.gz
-
-      - name: Generate test fixtures
-        run: bash fixtures/generate.sh
-
-      - name: Run BATS tests
-        run: |
-          # test/run-all starts bats/bats:1.13.0 with --entrypoint sh and
-          # runs 'apk add docker-cli' first so tests can invoke docker run.
-          IMAGE="${{ env.IMAGE }}:latest" bash test/run-all
-
-  # --------------------------------------------------------------------------
-  # Stage 4: Scan (parallel with test)
-  # --------------------------------------------------------------------------
-  scan:
-    name: Scan
-    needs: build
-    uses: 1121citrus/shared-github-workflows/.github/workflows/scan.yml@v1
-    with:
-      image: 1121citrus/usb-explore
-
-  # --------------------------------------------------------------------------
-  # Stage 5: Push (v* tag pushes only)
-  # --------------------------------------------------------------------------
-  push:
-    name: Push
-    needs: [test, scan]
-    if: >
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/tags/v')
-    uses: 1121citrus/shared-github-workflows/.github/workflows/push.yml@v1
-    with:
-      image: 1121citrus/usb-explore
+      inject-metadata: true
+      test-mode: bats-docker-cli
+      test-bats-files: |
+        test/01-build.bats
+        test/02-image-structure.bats
+        test/03-invocation.bats
+        test/04-env-metadata.bats
+        test/05-partition-discovery.bats
+        test/06-subcommands.bats
+        test/07-capture.bats
+        test/08-cli.bats
+      test-pre-command: bash fixtures/generate.sh
     secrets: inherit
