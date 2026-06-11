@@ -16,7 +16,11 @@ ext_detect() {
 # Returns: 0 on success
 ext_mount() {
     local node="${1}" mp="${2}"
-    mount -o ro -t auto "${node}" "${mp}"
+    # noload skips journal replay, which is required when the filesystem was not
+    # cleanly unmounted (needs_recovery flag set). Without noload, the kernel
+    # refuses a read-only mount of a dirty ext4 journal. Same rationale as
+    # norecovery in xfs_mount.
+    mount -o ro,noload -t ext4 "${node}" "${mp}"
 }
 
 # Unmount the mountpoint (best-effort).
