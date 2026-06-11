@@ -108,6 +108,24 @@ complete and exact — the Mac's filesystem just skips writing zero blocks.
 Progress is reported every 5 seconds. On a large drive, capturing can
 take 15–30 minutes. You can unplug the drive when it finishes.
 
+#### Why capture is required — and why direct device access is not possible
+
+Docker Desktop on macOS runs a Linux VM (via Hypervisor.framework or
+HyperKit). macOS block device nodes such as `/dev/disk4` do not exist
+inside that VM. Docker's file-sharing layer handles regular files, not
+raw block devices, so passing `-v /dev/disk4:/disk.img` or
+`--device /dev/disk4` to a container does not work.
+
+`capture` exists to bridge this gap: it runs `dd` natively on macOS
+(no Docker involved) and writes the device contents to a plain file.
+Every other subcommand then bind-mounts that file into the container as
+`/disk.img` — the mechanism that does work across the macOS-to-Docker
+boundary.
+
+The I/O cost is a one-time overhead. Once the image file exists, all
+explore operations (`info`, `copy`, `run`, `diff`, `shell`) read only
+what they need and are fast regardless of the original drive size.
+
 ---
 
 ### `info` — show the partition table
