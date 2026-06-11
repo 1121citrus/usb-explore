@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Generator: build-generate
 
 # test/run-all wrapper script
 
