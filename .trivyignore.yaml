@@ -1,0 +1,10 @@
+# Trivy ignore file — YAML format.
+# Known vulnerabilities tracked in SECURITY.md.
+# Review each entry before the expiry date.
+
+vulnerabilities:
+  # openssl: heap use-after-free in PKCS7_verify()
+  # fix: libssl3t64 3.0.13-0ubuntu3.11 (not yet in Ubuntu 24.04 apt repos)
+  - id: CVE-2026-45447
+    statement: "fix version not yet available in Ubuntu 24.04 package repositories"
+    expired_at: "2026-12-31T00:00:00Z"
