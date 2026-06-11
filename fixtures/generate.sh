@@ -195,5 +195,49 @@ trap - EXIT
 cp "${IMG}" /fixtures/mbr.img
 SCRIPT
 
+# ---------------------------------------------------------------------------
+# dirty-ext4.img: GPT, EFI (100 MB) + ext4 root (100 MB) with needs_recovery
+# set in the superblock — simulates a USB captured without a clean unmount.
+# ---------------------------------------------------------------------------
+make_image dirty-ext4.img <<'SCRIPT'
+IMG=/tmp/dirty-ext4.img
+truncate -s 260M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+100M -t 1:ef00 -c 1:"EFI" \
+    -n 2:0:+100M -t 2:8300 -c 2:"dirty-root" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+LP2=$(part_loop "${IMG}" 2)
+trap 'umount /mnt 2>/dev/null||true; losetup -d "${LP1}" "${LP2}" 2>/dev/null||true' EXIT
+
+mkfs.fat -F32 -n EFI       "${LP1}" >/dev/null
+mkfs.ext4 -q -L dirty-root "${LP2}"
+
+mount "${LP2}" /mnt
+mkdir -p /mnt/etc
+echo "dirty-ext4-test" > /mnt/etc/hostname
+umount /mnt
+
+# Re-set EXT4_FEATURE_INCOMPAT_RECOVER (0x0004) in the superblock to simulate
+# a filesystem that was captured without a clean unmount. The ext4 superblock
+# sits at byte 1024 from the partition start; s_feature_incompat is at
+# superblock offset 0x60 (96), so the absolute offset into the loop device is
+# 1024 + 96 = 1120. Python reads the current little-endian uint32 and ORs in
+# the recover bit, which the mount code would need to replay (triggering the
+# "cannot mount read-only" error without the noload fix).
+python3 -c "
+import struct
+with open('${LP2}', 'r+b') as f:
+    f.seek(1120)
+    val = struct.unpack('<I', f.read(4))[0]
+    f.seek(1120)
+    f.write(struct.pack('<I', val | 0x04))
+"
+
+losetup -d "${LP1}" "${LP2}"
+trap - EXIT
+cp "${IMG}" /fixtures/dirty-ext4.img
+SCRIPT
+
 log "All fixtures generated."
 ls -lh "${FIXTURES_DIR}"/*.img 2>/dev/null || true

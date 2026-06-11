@@ -192,6 +192,21 @@ run_single() {
 }
 
 # ---------------------------------------------------------------------------
+# dirty-ext4.img (unclean journal — regression test for noload fix)
+# ---------------------------------------------------------------------------
+
+@test "subcommand dirty-ext4: mounts and reads file from partition with dirty journal" {
+    [[ -f "${FIXTURES}/dirty-ext4.img" ]] || skip "fixture dirty-ext4.img not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/dirty-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dirty-ext4-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # mbr.img (MBR layout)
 # ---------------------------------------------------------------------------
 
