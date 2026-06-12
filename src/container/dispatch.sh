@@ -220,7 +220,17 @@ do_archive() {
 do_browse() {
     mount_partition
     cd /mnt/part
-    exec mc /mnt/part
+    local _mc_rc=0
+    mc /mnt/part || _mc_rc=$?
+    # mc enables mouse tracking and alternate-screen mode and does not always
+    # disable them cleanly on exit (e.g. when its Ctrl-O subshell is still
+    # running).  \033c is the VT100 "Reset to Initial State" sequence: it
+    # exits the alternate screen, disables all mouse-tracking modes, and
+    # resets SGR attributes.  Emitting it here ensures the host terminal is
+    # clean before the container process exits and Docker kills any lingering
+    # mc subprocesses.
+    printf '\033c'
+    return "${_mc_rc}"
 }
 
 # ---------------------------------------------------------------------------
