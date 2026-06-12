@@ -283,3 +283,66 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"absolute"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Exit-code normalisation — interactive subcommands map 130 (SIGINT) to 0
+#
+# A docker stub exits 130 from 'run' (simulating Ctrl-C from inside the
+# interactive session). Passing -p 1 globally skips resolve_partition's own
+# docker call so only the final run_container invocation fires.
+# ---------------------------------------------------------------------------
+
+# _make_docker_stub — write a minimal docker stub into a temp dir and print
+# the dir path.  The stub exits $1 for 'docker run'; 0 for info and image.
+_make_docker_stub() {
+    local run_exit="${1:-130}"
+    local dir
+    dir=$(mktemp -d /tmp/usb-stub-XXXXXX)
+    cat > "${dir}/docker" << EOF
+#!/bin/sh
+case "\$1" in
+    info)  exit 0 ;;
+    image) exit 0 ;;
+    run)   exit ${run_exit} ;;
+    *)     exit 1 ;;
+esac
+EOF
+    chmod +x "${dir}/docker"
+    echo "${dir}"
+}
+
+@test "cli: 'shell' maps docker exit 130 (Ctrl-C) to exit 0" {
+    local tmp stub
+    tmp=$(mktemp /tmp/usb-sigint-XXXXXX)
+    stub=$(_make_docker_stub 130)
+    run env PATH="${stub}:${PATH}" bash "${SCRIPT}" --image "${tmp}" -p 1 shell
+    rm -f "${tmp}"; rm -rf "${stub}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "cli: 'shell' propagates non-130 docker exit codes" {
+    local tmp stub
+    tmp=$(mktemp /tmp/usb-sigint-XXXXXX)
+    stub=$(_make_docker_stub 1)
+    run env PATH="${stub}:${PATH}" bash "${SCRIPT}" --image "${tmp}" -p 1 shell
+    rm -f "${tmp}"; rm -rf "${stub}"
+    [ "${status}" -eq 1 ]
+}
+
+@test "cli: 'browse' maps docker exit 130 (Ctrl-C) to exit 0" {
+    local tmp stub
+    tmp=$(mktemp /tmp/usb-sigint-XXXXXX)
+    stub=$(_make_docker_stub 130)
+    run env PATH="${stub}:${PATH}" bash "${SCRIPT}" --image "${tmp}" -p 1 browse
+    rm -f "${tmp}"; rm -rf "${stub}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "cli: 'serve' maps docker exit 130 (Ctrl-C) to exit 0" {
+    local tmp stub
+    tmp=$(mktemp /tmp/usb-sigint-XXXXXX)
+    stub=$(_make_docker_stub 130)
+    run env PATH="${stub}:${PATH}" bash "${SCRIPT}" --image "${tmp}" -p 1 serve
+    rm -f "${tmp}"; rm -rf "${stub}"
+    [ "${status}" -eq 0 ]
+}

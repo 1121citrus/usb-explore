@@ -244,7 +244,8 @@ usb-explore shell [-i usb.img] [-p N]
 ```
 
 Starts a bash shell inside a container with the partition mounted at
-`/mnt/part`. Type `exit` or press Ctrl-D to leave.
+`/mnt/part`. Type `exit` or press Ctrl-D to leave. Ctrl-C interrupts the current
+command but keeps the shell open — it does not exit the session.
 
 ```bash
 usb-explore shell

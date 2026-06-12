@@ -400,9 +400,15 @@ do_browse() {
     ensure_image
     resolve_partition
 
+    local rc=0
     run_container \
         -i -t \
-        "${IMAGE_REF}" browse
+        "${IMAGE_REF}" browse || rc=$?
+    # 130 = SIGINT (Ctrl-C); expected exit for interactive subcommands.
+    # set -e prevents a plain rc=$? assignment after a non-zero command,
+    # so the || idiom is required to capture the code without triggering errexit.
+    [[ "${rc}" -eq 130 ]] && return 0
+    return "${rc}"
 }
 
 # ---------------------------------------------------------------------------
@@ -899,9 +905,12 @@ do_serve() {
         ( sleep 1 && open "http://localhost:${port}/" ) &
     fi
 
+    local rc=0
     run_container \
         -p "${port}:8080" \
-        "${IMAGE_REF}" serve
+        "${IMAGE_REF}" serve || rc=$?
+    [[ "${rc}" -eq 130 ]] && return 0
+    return "${rc}"
 }
 
 # ---------------------------------------------------------------------------
@@ -925,9 +934,12 @@ do_shell() {
     ensure_image
     resolve_partition
 
+    local rc=0
     run_container \
         -i -t \
-        "${IMAGE_REF}" shell
+        "${IMAGE_REF}" shell || rc=$?
+    [[ "${rc}" -eq 130 ]] && return 0
+    return "${rc}"
 }
 
 # ---------------------------------------------------------------------------
