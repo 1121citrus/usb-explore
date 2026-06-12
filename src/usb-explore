@@ -196,47 +196,27 @@ trap '_cleanup' INT TERM EXIT
 # Partition auto-selection
 # ---------------------------------------------------------------------------
 
-# resolve_partition — set PARTITION via auto-selection if not already set.
-# Runs a short-lived info --json container and applies the selection rules
-# described in the design: 0 → error, 1 → auto, 2+ → print table + error.
-# Args: none (reads IMAGE_FILE, sets PARTITION)
-# Returns: 0 with PARTITION set; exits on error
+# resolve_partition — auto-select the mountable partition.
+# Delegates to the container's select-partition command so all jq processing
+# stays inside the container (jq is guaranteed present; host may not have it).
+# Args: none (reads IMAGE_FILE, IMAGE_REF; sets PARTITION)
+# Returns: 0 with PARTITION set; exits with container exit code on error
 resolve_partition() {
     [[ -n "${PARTITION}" ]] && return 0
 
-    local json mountable count
-    json=$(docker run --rm --privileged \
+    local result
+    result=$(docker run --rm --privileged \
         -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro" \
-        "${IMAGE_REF}" info --json 2>/dev/null)
+        "${IMAGE_REF}" select-partition) || exit $?
 
-    mountable=$(echo "${json}" \
-        | docker run --rm -i "${REGISTRY}/usb-explore:${IMAGE_TAG}" \
-            bash -c 'jq "[.partitions[] | select(.mountable == true)]"' \
-        2>/dev/null || \
-        echo "${json}" | jq '[.partitions[] | select(.mountable == true)]')
+    local num rest fs size
+    num="${result%% *}"
+    rest="${result#* }"
+    fs="${rest%% *}"
+    size="${rest#* }"
 
-    count=$(echo "${mountable}" | jq 'length')
-
-    case "${count}" in
-        0)
-            err "No mountable partitions found in ${IMAGE_FILE}."
-            err "Run 'usb-explore info' to see the full partition table."
-            exit 5 ;;
-        1)
-            PARTITION=$(echo "${mountable}" | jq -r '.[0].number')
-            local fs size
-            fs=$(echo "${mountable}" | jq -r '.[0].fstype')
-            size=$(echo "${mountable}" | jq -r '.[0].size_human')
-            log "Selected partition ${PARTITION} (${fs}, ${size})" ;;
-        *)
-            # Print the human table then error
-            docker run --rm --privileged \
-                -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro" \
-                "${IMAGE_REF}" info
-            err "Multiple mountable partitions found."
-            err "Pass -p|--partition N to select one."
-            exit 5 ;;
-    esac
+    PARTITION="${num}"
+    log "Selected partition ${PARTITION} (${fs}, ${size})"
 }
 
 # ---------------------------------------------------------------------------

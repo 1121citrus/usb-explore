@@ -121,12 +121,13 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 
 # ---------------------------------------------------------------------------
 # Subcommand routing — each subcommand must be recognised.
-# Exit 3 (no Docker) or 4 (no image) are both acceptable; exit 2 would
-# mean the subcommand was not recognised.
+# All tests pass --image /nonexistent.img so check_image_file exits 4 (image
+# not found) without invoking any container or host tool. Exit 3 (no Docker)
+# is also acceptable. Neither is exit 2 (usage error = unknown subcommand).
 # ---------------------------------------------------------------------------
 
 @test "cli: 'archive' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" archive /etc ./etc.tar.gz
+    run bash "${SCRIPT}" --image /nonexistent.img archive /etc ./etc.tar.gz
     [ "${status}" -ne 2 ]
 }
 
@@ -143,7 +144,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 }
 
 @test "cli: 'browse' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" browse
+    run bash "${SCRIPT}" --image /nonexistent.img browse
     [ "${status}" -ne 2 ]
 }
 
@@ -159,7 +160,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 }
 
 @test "cli: 'find' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" find "*.log"
+    run bash "${SCRIPT}" --image /nonexistent.img find "*.log"
     [ "${status}" -ne 2 ]
 }
 
@@ -170,12 +171,12 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 }
 
 @test "cli: 'find' --grep flag is accepted" {
-    run bash "${SCRIPT}" find --grep "ERROR"
+    run bash "${SCRIPT}" --image /nonexistent.img find --grep "ERROR"
     [ "${status}" -ne 2 ]
 }
 
 @test "cli: 'info' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" info
+    run bash "${SCRIPT}" --image /nonexistent.img info
     [ "${status}" -ne 2 ]
 }
 
@@ -185,12 +186,12 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 }
 
 @test "cli: 'serve' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" serve
+    run bash "${SCRIPT}" --image /nonexistent.img serve
     [ "${status}" -ne 2 ]
 }
 
 @test "cli: 'serve' --port flag is accepted" {
-    run bash "${SCRIPT}" serve --port 9090
+    run bash "${SCRIPT}" --image /nonexistent.img serve --port 9090
     [ "${status}" -ne 2 ]
 }
 
@@ -201,10 +202,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 }
 
 @test "cli: 'shell' subcommand is routed (not a usage error)" {
-    # Allow any exit code: Docker may be unavailable (3), image missing (4),
-    # or a downstream tool may be absent (127). None of these is exit 2
-    # (usage error = unknown subcommand).
-    run bash "${SCRIPT}" shell
+    run bash "${SCRIPT}" --image /nonexistent.img shell
     [ "${status}" -ne 2 ]
 }
 
@@ -270,7 +268,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 # ---------------------------------------------------------------------------
 
 @test "cli: 'hash' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" hash /etc/hostname
+    run bash "${SCRIPT}" --image /nonexistent.img hash /etc/hostname
     [ "${status}" -ne 2 ]
 }
 

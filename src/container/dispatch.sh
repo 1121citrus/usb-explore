@@ -368,6 +368,44 @@ do_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: select-partition
+# ---------------------------------------------------------------------------
+
+# Auto-select a mountable partition and print its metadata to stdout.
+# Runs info.sh internally; no loop device setup is performed.
+# Called by the host wrapper's resolve_partition so that all jq processing
+# stays inside the container (jq is guaranteed installed; host may not have it).
+# Args:
+#   None
+# Returns:
+#   0 and writes "<number> <fstype> <size_human>" to stdout (exactly 1 match)
+#   5 if no mountable or multiple mountable partitions (table/error to stderr)
+do_select_partition() {
+    local json mountable count
+    json=$(/usr/local/lib/usb-explore/info.sh --json 2>/dev/null)
+    mountable=$(echo "${json}" | jq '[.partitions[] | select(.mountable == true)]')
+    count=$(echo "${mountable}" | jq 'length')
+
+    case "${count}" in
+        0)
+            echo "error: no mountable partitions found in /disk.img" >&2
+            echo "       Run 'usb-explore info' to see the full partition table" >&2
+            exit 5 ;;
+        1)
+            local num fs size
+            num=$(echo "${mountable}" | jq -r '.[0].number')
+            fs=$(echo "${mountable}"  | jq -r '.[0].fstype')
+            size=$(echo "${mountable}" | jq -r '.[0].size_human')
+            echo "${num} ${fs} ${size}" ;;
+        *)
+            /usr/local/lib/usb-explore/info.sh >&2
+            echo "error: multiple mountable partitions found" >&2
+            echo "       Pass -p|--partition N to select one" >&2
+            exit 5 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: serve
 # ---------------------------------------------------------------------------
 
@@ -401,8 +439,9 @@ case "${SUBCOMMAND}" in
     find)    do_find    "$@" ;;
     hash)    do_hash    "$@" ;;
     info)    do_info    "$@" ;;
-    run)     do_run     "$@" ;;
-    serve)   do_serve   "$@" ;;
+    run)              do_run              "$@" ;;
+    select-partition) do_select_partition "$@" ;;
+    serve)            do_serve            "$@" ;;
     shell)   do_shell   "$@" ;;
     *)
         echo "error: unknown subcommand '${SUBCOMMAND}'" >&2

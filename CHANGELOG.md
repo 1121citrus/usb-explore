@@ -45,6 +45,19 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   guard, and dispatch case in `src/usb-explore`; function definitions
   and dispatch case in `src/container/dispatch.sh`) are now in
   lexical order throughout the codebase.
+- `resolve_partition` in `src/usb-explore` now delegates all JSON
+  processing to a new container-side `select-partition` command,
+  eliminating the host-side `jq` dependency that caused `BW01`
+  warnings (exit 127) in the BATS test suite when `jq` is absent
+  from the host (e.g. the Alpine-based `bats/bats:1.13.0` runner).
+
+### Tests
+
+- Routing tests in `test/08-cli.bats` now pass `--image /nonexistent.img`
+  so they exit at `check_image_file` (exit 4) without invoking any
+  container or host tool. Previously, a `usb.img` in the working
+  directory caused them to proceed into `resolve_partition` and
+  trigger BW01 advisory warnings.
 
 ### Documentation
 
