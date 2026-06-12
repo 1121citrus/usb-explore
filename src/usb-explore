@@ -243,7 +243,10 @@ run_container() {
         echo "[debug] docker ${docker_args[*]}" >&2
     fi
 
-    docker "${docker_args[@]}"
+    # Suppress Docker Desktop's "What's next:" hint block, which otherwise
+    # appears after interactive sessions and shifts terminal content down,
+    # breaking the cursor cleanup in do_shell.
+    DOCKER_CLI_HINTS=false docker "${docker_args[@]}"
 }
 
 # set_tty_flags — populate TTY_FLAGS array with -i -t when interactive,
