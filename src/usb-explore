@@ -938,6 +938,16 @@ do_shell() {
     run_container \
         -i -t \
         "${IMAGE_REF}" shell || rc=$?
+    # When an interactive bash session ends (user typed "exit" or pressed
+    # Ctrl-D), bash itself prints "exit" to the terminal.  When the user
+    # typed "exit", the PTY already echoed the keystrokes, so bash's own
+    # print produces a spurious second "exit" line after the session ends.
+    # Erasing one line (cursor-up + clear-line) after the container exits
+    # removes that trailing artefact.  Only applied when stderr is a real
+    # terminal and the session ended normally (not Ctrl-C, rc=130).
+    if [[ "${rc}" -ne 130 && -t 2 ]]; then
+        printf '\033[1A\033[2K\r' >&2
+    fi
     [[ "${rc}" -eq 130 ]] && return 0
     return "${rc}"
 }

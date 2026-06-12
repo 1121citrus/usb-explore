@@ -424,7 +424,14 @@ do_shell() {
     mount_partition
     export PS1="(usb-explore p${USB_PARTITION}) \w \$ "
     cd /mnt/part
-    exec bash --norc --noprofile
+    # Disable bracketed-paste mode (bash 5.1+ default).  Without this,
+    # readline emits [?2004h/[?2004l escape sequences around each accepted
+    # command, which changes the CRLF structure of the output and breaks
+    # the host-side cursor cleanup that erases the trailing 'exit' line.
+    local _rc
+    _rc=$(mktemp)
+    printf 'set enable-bracketed-paste off\n' > "${_rc}"
+    INPUTRC="${_rc}" exec bash --norc --noprofile
 }
 
 # ---------------------------------------------------------------------------
