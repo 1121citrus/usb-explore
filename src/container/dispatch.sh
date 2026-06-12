@@ -360,6 +360,36 @@ do_find() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: hash
+# ---------------------------------------------------------------------------
+
+# Print the SHA-256 checksum of a single file from the mounted partition.
+# The output path is rewritten to partition-relative so users can paste it
+# directly into copy/archive/diff without stripping /mnt/part manually.
+# Args:
+#   $1  path — absolute path within the partition
+# Returns:
+#   0 on success; 1 if the path does not exist or is a directory
+do_hash() {
+    local src="${1}"
+    mount_partition
+
+    local src_abs="/mnt/part/${src#/}"
+    if [[ ! -e "${src_abs}" ]]; then
+        echo "error: path not found in image: ${src}" >&2
+        exit 1
+    fi
+    if [[ -d "${src_abs}" ]]; then
+        echo "error: ${src} is a directory; hash requires a file" >&2
+        exit 1
+    fi
+
+    # sha256sum output: "<digest>  <path>" — rewrite container path to
+    # the partition-relative form the user supplied.
+    sha256sum "${src_abs}" | sed "s| ${src_abs}$| ${src}|"
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -373,6 +403,7 @@ case "${SUBCOMMAND}" in
     diff)    do_diff    "$@" ;;
     serve)   do_serve   "$@" ;;
     find)    do_find    "$@" ;;
+    hash)    do_hash    "$@" ;;
     *)
         echo "error: unknown subcommand '${SUBCOMMAND}'" >&2
         exit 2 ;;

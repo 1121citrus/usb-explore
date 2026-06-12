@@ -401,3 +401,71 @@ run_single() {
         "${IMAGE}" find "ZZZNOMATCH.xyz"
     [ "${status}" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# hash
+# ---------------------------------------------------------------------------
+
+@test "subcommand hash: prints sha256 checksum of a file" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" hash /etc/hostname
+    [ "${status}" -eq 0 ]
+    # SHA-256 digest is 64 lowercase hex characters followed by two spaces
+    [[ "${output}" =~ ^[0-9a-f]{64}[[:space:]][[:space:]] ]]
+}
+
+@test "subcommand hash: output path is partition-relative (no /mnt/part)" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" hash /etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/etc/hostname"* ]]
+    [[ "${output}" != *"/mnt/part"* ]]
+}
+
+@test "subcommand hash: result matches sha256sum of the extracted file" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/hash-verify"
+    mkdir -p "${outdir}"
+
+    docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" copy /etc/hostname hostname >/dev/null
+
+    local img_hash host_hash
+    img_hash=$(docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" hash /etc/hostname | awk '{print $1}')
+    host_hash=$(sha256sum "${outdir}/hostname" | awk '{print $1}')
+
+    [ "${img_hash}" = "${host_hash}" ]
+    [ -n "${img_hash}" ]
+}
+
+@test "subcommand hash: exits 1 for non-existent path" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" hash /does/not/exist
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"not found"* ]]
+}
+
+@test "subcommand hash: exits 1 for a directory path" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" hash /etc
+    [ "${status}" -eq 1 ]
+    [[ "${output}" == *"directory"* ]]
+}

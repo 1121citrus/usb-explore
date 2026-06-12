@@ -39,6 +39,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"archive"* ]]
     [[ "${output}" == *"browse"*  ]]
     [[ "${output}" == *"find"*    ]]
+    [[ "${output}" == *"hash"*    ]]
     [[ "${output}" == *"clean"*   ]]
 }
 
@@ -219,6 +220,27 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 @test "cli: capture --no-sparse removes conv=sparse from dry-run" {
     run bash "${SCRIPT}" capture /dev/disk0 --no-sparse --dry-run
     [[ "${output}" != *"conv=sparse"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# hash
+# ---------------------------------------------------------------------------
+
+@test "cli: 'hash' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" hash /etc/hostname
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'hash' subcommand reports missing path argument" {
+    run bash "${SCRIPT}" hash
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: 'hash' rejects a non-absolute path" {
+    run bash "${SCRIPT}" hash etc/hostname
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"absolute"* ]]
 }
 
 # ---------------------------------------------------------------------------

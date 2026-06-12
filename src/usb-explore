@@ -63,6 +63,11 @@
 #             Exit 1 when --grep finds no matches (standard grep
 #             behaviour); exit 0 when a name search finds nothing.
 #
+#   hash    [-i|--image PATH] [-p|--partition N] <path>
+#             Print the SHA-256 checksum of <path> (absolute within the
+#             partition) without extracting the file to the host. Output
+#             format is identical to sha256sum(1): "<digest>  <path>".
+#
 #   clean   [-i|--image PATH] [-y|--yes]
 #             Remove the captured disk image file. Prompts for
 #             confirmation unless -y/--yes is given. Does not require
@@ -855,6 +860,43 @@ do_find() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: hash
+# ---------------------------------------------------------------------------
+
+# Print the SHA-256 checksum of a file from the partition without extraction.
+# Args:
+#   [-p|--partition N]  override auto-detected partition number
+#   <path>              absolute path within the partition
+# Returns:
+#   0 on success; 1 if path not found or is a directory
+do_hash() {
+    local src=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown hash option: ${1}" ;;
+            *)
+                [[ -z "${src}" ]] || die "Unexpected argument: ${1}"
+                src="${1}" ;;
+        esac
+        shift
+    done
+
+    [[ -n "${src}" ]] || die "hash requires a <path> argument"
+    [[ "${src}" == /* ]] || die "<path> must be absolute (start with /)"
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    run_container \
+        "${IMAGE_REF}" hash "${src}"
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: clean
 # ---------------------------------------------------------------------------
 
@@ -928,7 +970,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        build|capture|info|shell|browse|copy|archive|run|diff|serve|find|clean)
+        build|capture|info|shell|browse|copy|archive|run|diff|serve|find|hash|clean)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -952,5 +994,6 @@ case "${SUBCOMMAND}" in
     diff)    do_diff    "$@" ;;
     serve)   do_serve   "$@" ;;
     find)    do_find    "$@" ;;
+    hash)    do_hash    "$@" ;;
     clean)   do_clean   "$@" ;;
 esac
