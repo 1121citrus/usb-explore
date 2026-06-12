@@ -219,20 +219,25 @@ echo "dirty-ext4-test" > /mnt/etc/hostname
 umount /mnt
 
 # Re-set EXT4_FEATURE_INCOMPAT_RECOVER (0x0004) in the superblock to simulate
-# a filesystem that was captured without a clean unmount. The ext4 superblock
-# sits at byte 1024 from the partition start; s_feature_incompat is at
-# superblock offset 0x60 (96), so the absolute offset into the loop device is
-# 1024 + 96 = 1120. Python reads the current little-endian uint32 and ORs in
-# the recover bit, which the mount code would need to replay (triggering the
-# "cannot mount read-only" error without the noload fix).
-python3 -c "
+# a filesystem that was captured without a clean unmount.
+#
+# The ext4 superblock sits at byte 1024 from the partition start;
+# s_feature_incompat is at superblock offset 0x60 (96), so the absolute
+# offset into the loop device is 1024 + 96 = 1120.
+#
+# Direct byte writes (Python struct) invalidate the superblock CRC32c
+# checksum when metadata_csum is enabled (the default since Ubuntu 24.04),
+# causing blkid to reject the superblock as corrupt. Instead: Python reads
+# the current value (read-only, no checksum concern), then debugfs writes
+# it back — debugfs always recomputes and updates the checksum.
+new_incompat=$(python3 -c "
 import struct
-with open('${LP2}', 'r+b') as f:
+with open('${LP2}', 'rb') as f:
     f.seek(1120)
     val = struct.unpack('<I', f.read(4))[0]
-    f.seek(1120)
-    f.write(struct.pack('<I', val | 0x04))
-"
+    print('0x{:08X}'.format(val | 0x04))
+")
+debugfs -w -R "set_super_value s_feature_incompat ${new_incompat}" "${LP2}" 2>/dev/null
 
 losetup -d "${LP1}" "${LP2}"
 trap - EXIT
