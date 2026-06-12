@@ -327,8 +327,9 @@ usb-explore run [-i usb.img] [-p N] [--] <command> [args…]
 ```
 
 Runs a command inside the container with the partition mounted. Arguments
-that start with `/` are automatically prefixed with `/mnt/part` so you
-can write natural Linux paths.
+that start with `/` are treated as partition-relative paths. Output paths
+are also partition-relative, so you can pipe them directly into `copy`,
+`archive`, `hash`, or `diff`.
 
 ```bash
 # Find all config files

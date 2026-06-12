@@ -347,6 +347,7 @@ do_archive() {
     [[ -n "${src}" ]]  || die "archive requires <src-path>"
     [[ -n "${dest}" ]] || die "archive requires <dest>"
     [[ "${src}" == /* ]] || die "<src-path> must be absolute (start with /)"
+    src="${src#/mnt/part}"
 
     local out_name
     out_name="$(basename "${dest}")"
@@ -649,6 +650,7 @@ do_copy() {
     [[ -n "${src}" ]]  || die "copy requires <src-path>"
     [[ -n "${dest}" ]] || die "copy requires <dest>"
     [[ "${src}" == /* ]] || die "<src-path> must be absolute (start with /)"
+    src="${src#/mnt/part}"
 
     check_docker
     check_image_file
@@ -696,6 +698,7 @@ do_diff() {
     [[ -n "${img_path}" ]] || die "diff requires <image-path>"
     [[ -n "${ref_path}" ]] || die "diff requires <ref-path>"
     [[ "${img_path}" == /* ]] || die "<image-path> must be absolute (start with /)"
+    img_path="${img_path#/mnt/part}"
     [[ -e "${ref_path}" ]] || die "Reference path not found: ${ref_path}"
 
     check_docker
@@ -788,6 +791,7 @@ do_hash() {
 
     [[ -n "${src}" ]] || die "hash requires a <path> argument"
     [[ "${src}" == /* ]] || die "<path> must be absolute (start with /)"
+    src="${src#/mnt/part}"
 
     check_docker
     check_image_file

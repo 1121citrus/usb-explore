@@ -361,10 +361,13 @@ do_info() {
 # /mnt/part/<path> by the host wrapper before being passed in.
 # CWD is set to /mnt/part so that bare commands like 'ls' or 'find .'
 # operate on the partition root rather than the container root.
+# Output is filtered to strip the /mnt/part prefix from any paths so that
+# callers can pipe run output directly into copy/archive/hash/diff.
 do_run() {
     mount_partition
     cd /mnt/part
-    exec "$@"
+    "$@" | sed 's|/mnt/part/|/|g'
+    return "${PIPESTATUS[0]}"
 }
 
 # ---------------------------------------------------------------------------
