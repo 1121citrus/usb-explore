@@ -37,6 +37,11 @@
 #             Diff <image-path> (within the partition) against <ref-path>
 #             on the host. Exit code: 0=identical, 1=different, 2=error.
 #
+#   serve   [-i|--image PATH] [-p|--partition N] [--port PORT]
+#             Start a read-only HTTP file server on the host at
+#             http://localhost:PORT (default 8080), browseable in any
+#             web browser. Press Ctrl-C to stop.
+#
 # GLOBAL OPTIONS
 #   -i|--image PATH        Disk image file (default: ./usb.img)
 #   -p|--partition N       Partition number to mount (default: auto)
@@ -278,6 +283,49 @@ _progress_monitor() {
             "$(( elapsed / 60 ))" "$(( elapsed % 60 ))" \
             "$(( eta_s  / 60 ))" "$(( eta_s  % 60 ))" >&2
     done
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: serve
+# ---------------------------------------------------------------------------
+
+# do_serve — start a read-only HTTP directory server over the mounted partition.
+# Args:
+#   [--port PORT]  host port to listen on (default: 8080)
+# Returns:
+#   Runs until interrupted; exit code reflects container exit code.
+do_serve() {
+    local port=8080
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --port)
+                [[ -n "${2:-}" ]] || die "--port requires a number"
+                port="${2}"; shift ;;
+            -*) die "Unknown serve option: ${1}" ;;
+        esac
+        shift
+    done
+
+    if ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        die "--port must be a number between 1 and 65535"
+    fi
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    log "Serving partition ${PARTITION} at http://localhost:${port}/"
+    log "Press Ctrl-C to stop."
+
+    # Open the browser on macOS after a short delay to let the server start.
+    if command -v open >/dev/null 2>&1; then
+        ( sleep 1 && open "http://localhost:${port}/" ) &
+    fi
+
+    run_container \
+        -p "${port}:8080" \
+        "${IMAGE_REF}" serve
 }
 
 # ---------------------------------------------------------------------------
@@ -673,7 +721,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        build|capture|info|shell|copy|run|diff)
+        build|capture|info|shell|copy|run|diff|serve)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -693,4 +741,5 @@ case "${SUBCOMMAND}" in
     copy)    do_copy    "$@" ;;
     run)     do_run     "$@" ;;
     diff)    do_diff    "$@" ;;
+    serve)   do_serve   "$@" ;;
 esac

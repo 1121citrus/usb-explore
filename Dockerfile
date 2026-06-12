@@ -46,6 +46,7 @@ RUN apt-get update \
       diffutils \
       file \
       jq \
+      python3 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/container/ /usr/local/lib/usb-explore/

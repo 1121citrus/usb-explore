@@ -219,6 +219,17 @@ do_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: serve
+# ---------------------------------------------------------------------------
+
+# Serve the mounted partition as a read-only HTTP directory index on port 8080.
+# The host wrapper maps a host port to this container port via -p.
+do_serve() {
+    mount_partition
+    exec python3 -m http.server 8080 --directory /mnt/part
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: diff
 # ---------------------------------------------------------------------------
 
@@ -246,6 +257,7 @@ case "${SUBCOMMAND}" in
     copy)  do_copy  "$@" ;;
     run)   do_run   "$@" ;;
     diff)  do_diff  "$@" ;;
+    serve) do_serve "$@" ;;
     *)
         echo "error: unknown subcommand '${SUBCOMMAND}'" >&2
         exit 2 ;;

@@ -35,6 +35,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"copy"*    ]]
     [[ "${output}" == *"run"*     ]]
     [[ "${output}" == *"diff"*    ]]
+    [[ "${output}" == *"serve"*   ]]
 }
 
 @test "cli: -h is an alias for --help" {
@@ -146,6 +147,22 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 @test "cli: 'diff' subcommand reports missing arguments" {
     run bash "${SCRIPT}" diff
     [ "${status}" -ne 0 ]
+}
+
+@test "cli: 'serve' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" serve
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'serve' --port flag is accepted" {
+    run bash "${SCRIPT}" serve --port 9090
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'serve' --port with invalid value exits non-zero" {
+    run bash "${SCRIPT}" serve --port notanumber
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"65535"* ]]
 }
 
 # ---------------------------------------------------------------------------

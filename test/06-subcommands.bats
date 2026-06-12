@@ -192,6 +192,69 @@ run_single() {
 }
 
 # ---------------------------------------------------------------------------
+# serve (HTTP directory server)
+# ---------------------------------------------------------------------------
+
+@test "subcommand serve: HTTP server returns directory listing for ext4 partition" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port=19080
+    local cid
+    cid=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port}:8080" \
+        "${IMAGE}" serve)
+
+    # Stop the container when the test exits regardless of outcome
+    # shellcheck disable=SC2064
+    trap "docker stop ${cid} >/dev/null 2>&1 || true" EXIT
+
+    # Wait up to 10 s for the HTTP server to respond
+    local ready=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if curl -sf "http://localhost:${port}/" >/dev/null 2>&1; then
+            ready=true; break
+        fi
+    done
+    [[ "${ready}" == true ]] || skip "HTTP server did not start within 10 s"
+
+    run curl -sf "http://localhost:${port}/"
+    [ "${status}" -eq 0 ]
+    # Directory listing should contain the 'etc' directory planted in the fixture
+    [[ "${output}" == *"etc"* ]]
+}
+
+@test "subcommand serve: individual file is retrievable via HTTP" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port=19081
+    local cid
+    cid=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port}:8080" \
+        "${IMAGE}" serve)
+
+    # shellcheck disable=SC2064
+    trap "docker stop ${cid} >/dev/null 2>&1 || true" EXIT
+
+    local ready=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if curl -sf "http://localhost:${port}/" >/dev/null 2>&1; then
+            ready=true; break
+        fi
+    done
+    [[ "${ready}" == true ]] || skip "HTTP server did not start within 10 s"
+
+    run curl -sf "http://localhost:${port}/etc/hostname"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # dirty-ext4.img (unclean journal — regression test for noload fix)
 # ---------------------------------------------------------------------------
 
