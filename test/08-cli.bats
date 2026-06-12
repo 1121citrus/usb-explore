@@ -381,3 +381,17 @@ EOF
 @test "shell: host do_shell emits cursor-up+clear-line escape after normal exit" {
     grep -q '\\033\[1A\\033\[2K' "${SCRIPT}"
 }
+
+# ---------------------------------------------------------------------------
+# Static-analysis — DOCKER_CLI_HINTS suppression
+#
+# Docker Desktop's Gordon integration appends a multi-line "What's next:"
+# block after interactive sessions that exit via Ctrl-D.  This block shifts
+# the terminal cursor past the single 'exit' line that do_shell's cleanup
+# escape targets, causing the artefact to remain visible.  Setting
+# DOCKER_CLI_HINTS=false in run_container suppresses the block entirely.
+# ---------------------------------------------------------------------------
+
+@test "run_container: sets DOCKER_CLI_HINTS=false to suppress hint block" {
+    grep -q 'DOCKER_CLI_HINTS=false' "${SCRIPT}"
+}
