@@ -395,3 +395,26 @@ EOF
 @test "run_container: sets DOCKER_CLI_HINTS=false to suppress hint block" {
     grep -q 'DOCKER_CLI_HINTS=false' "${SCRIPT}"
 }
+
+# ---------------------------------------------------------------------------
+# Static-analysis — /mnt/part path stripping
+#
+# 'run' output (and 'shell' session paths) include the container-internal
+# /mnt/part prefix.  copy/archive/hash/diff must strip that prefix before
+# passing the path to the container, otherwise the container prepends
+# /mnt/part again and the lookup fails.  container do_run must strip the
+# prefix from its own output so callers can pipe run output into those
+# subcommands without manual editing.
+# ---------------------------------------------------------------------------
+
+@test "copy: strips /mnt/part prefix from src path before container call" {
+    grep -q 'src#/mnt/part' "${SCRIPT}"
+}
+
+@test "diff: strips /mnt/part prefix from img_path before container call" {
+    grep -q 'img_path#/mnt/part' "${SCRIPT}"
+}
+
+@test "container do_run: filters /mnt/part from output via sed" {
+    grep -q "sed 's|/mnt/part/|/|g'" "${DISPATCH}"
+}
