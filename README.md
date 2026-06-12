@@ -13,6 +13,7 @@ handles that part.
 
 - [Quick start](#quick-start)
 - [Prerequisites](#prerequisites)
+- [Architecture overview](#architecture-overview)
 - [Subcommands](#subcommands)
 - [Partition selection](#partition-selection)
 - [Configuration](#configuration)
@@ -74,6 +75,17 @@ unplug the USB drive after step 2.
 
 No Homebrew packages required. The Docker image is pulled automatically
 on first use.
+
+---
+
+## Architecture overview
+
+Because Docker Desktop for macOS virtualizes Linux but does not expose raw host block devices (e.g., `/dev/disk4`) to containers, direct mounting of a USB drive is not possible. `usb-explore` uses a two-stage approach to bypass this limitation:
+
+1. **Host capture**: A native macOS script uses `dd` to copy the physical USB drive to a sparse image file block-by-block.
+2. **Container isolation**: The image file is bind-mounted into a minimal Ubuntu-based Docker container. The container uses standard Linux utilities (`sfdisk`, `losetup`, `blkid`, `mount`) to parse the partition table and attach loop devices.
+
+Filesystem support (ext4, xfs, vfat, iso9660) is implemented via a modular driver system inside the container. All partition mounts are strictly read-only, guaranteeing the captured disk image remains immutable. While the container requires `--privileged` to manage loop devices, its access is bounded by the Docker Desktop Linux VM, safely isolating the macOS host.
 
 ---
 
