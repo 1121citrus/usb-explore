@@ -15,19 +15,23 @@ handles that part.
 - [Prerequisites](#prerequisites)
 - [Architecture overview](#architecture-overview)
 - [Subcommands](#subcommands)
-  - [capture](#capture--copy-a-usb-drive-to-a-disk-image)
-  - [info](#info--show-the-partition-table)
-  - [shell](#shell--browse-interactively)
-  - [browse](#browse--visual-file-manager)
-  - [copy](#copy--copy-files-out-of-the-image)
-  - [archive](#archive--extract-a-directory-as-a-compressed-archive)
-  - [run](#run--run-a-command-against-the-image)
-  - [diff](#diff--compare-the-image-against-a-local-reference)
-  - [find](#find--search-for-files-or-content)
-  - [hash](#hash--verify-file-integrity)
-  - [serve](#serve--browse-the-partition-over-http)
-  - [clean](#clean--remove-the-disk-image)
-  - [build](#build--rebuild-the-docker-image-from-source)
+  - [Core workflow](#core-workflow)
+    - [capture — copy a USB drive to a disk image](#capture--copy-a-usb-drive-to-a-disk-image)
+    - [clean — remove the disk image](#clean--remove-the-disk-image)
+    - [copy — copy files out of the image](#copy--copy-files-out-of-the-image)
+    - [info — show the partition table](#info--show-the-partition-table)
+    - [shell — open an interactive bash shell](#shell--open-an-interactive-bash-shell)
+  - [Exploration and search](#exploration-and-search)
+    - [browse — visual file manager](#browse--visual-file-manager)
+    - [find — search for files or content](#find--search-for-files-or-content)
+    - [run — run a command against the image](#run--run-a-command-against-the-image)
+    - [serve — browse the partition over HTTP](#serve--browse-the-partition-over-http)
+  - [Expert tools](#expert-tools)
+    - [archive — create a compressed archive](#archive--create-a-compressed-archive)
+    - [diff — compare the image against a local reference](#diff--compare-the-image-against-a-local-reference)
+    - [hash — verify file integrity](#hash--verify-file-integrity)
+  - [Developer](#developer)
+    - [build — rebuild the Docker image from source](#build--rebuild-the-docker-image-from-source)
 - [Partition selection](#partition-selection)
 - [Configuration](#configuration)
 - [Building from source](#building-from-source)
@@ -108,7 +112,12 @@ Filesystem support (ext4, xfs, vfat, iso9660) is implemented via a modular drive
 
 ## Subcommands
 
-### `capture` — copy a USB drive to a disk image
+### Core workflow
+
+Capture the drive once, inspect its contents, extract what you need, and
+clean up when finished.
+
+#### `capture` — copy a USB drive to a disk image
 
 ```text
 usb-explore capture <device> [options]
@@ -137,7 +146,7 @@ complete and exact — the Mac's filesystem just skips writing zero blocks.
 Progress is reported every 5 seconds. On a large drive, capturing can
 take 15–30 minutes. You can unplug the drive when it finishes.
 
-#### Why capture is required — and why direct device access is not possible
+##### Why capture is required — and why direct device access is not possible
 
 Docker Desktop on macOS runs a Linux VM (via Hypervisor.framework or
 HyperKit). macOS block device nodes such as `/dev/disk4` do not exist
@@ -157,7 +166,51 @@ what they need and are fast regardless of the original drive size.
 
 ---
 
-### `info` — show the partition table
+#### `clean` — remove the disk image
+
+```text
+usb-explore clean [-i usb.img] [-y|--yes]
+```
+
+Removes the captured disk image file. Prompts for confirmation unless
+`-y` / `--yes` is given. Does not require Docker.
+
+```bash
+# Interactive confirmation prompt
+usb-explore clean
+
+# Skip the prompt (useful in scripts)
+usb-explore clean --yes
+
+# Remove a specific image file
+usb-explore --image /Volumes/backup/my-usb.img clean --yes
+```
+
+Exit code: 0 on success or when the user declines; 4 if the file does
+not exist.
+
+---
+
+#### `copy` — copy files out of the image
+
+```text
+usb-explore copy [-i usb.img] [-p N] <src-path> <dest>
+```
+
+Copies `<src-path>` (absolute path within the partition) to `<dest>` on
+your Mac. Works for both individual files and directories.
+
+```bash
+# Copy a single file
+usb-explore copy /etc/nginx/nginx.conf ./nginx.conf
+
+# Copy a whole directory
+usb-explore copy /etc ./etc-backup
+```
+
+---
+
+#### `info` — show the partition table
 
 ```text
 usb-explore info [-i usb.img] [--json]
@@ -184,7 +237,7 @@ Scheme: GPT
 
 ---
 
-### `shell` — browse interactively
+#### `shell` — open an interactive bash shell
 
 ```text
 usb-explore shell [-i usb.img] [-p N]
@@ -206,7 +259,11 @@ The partition is mounted **read-only**. You cannot modify the image.
 
 ---
 
-### `browse` — visual file manager
+### Exploration and search
+
+Navigate and search the partition without extracting files to the host.
+
+#### `browse` — visual file manager
 
 ```text
 usb-explore browse [-i usb.img] [-p N]
@@ -228,101 +285,7 @@ Requires a terminal (TTY). Cannot be used in a pipe or non-interactive script.
 
 ---
 
-### `copy` — copy files out of the image
-
-```text
-usb-explore copy [-i usb.img] [-p N] <src-path> <dest>
-```
-
-Copies `<src-path>` (absolute path within the partition) to `<dest>` on
-your Mac. Works for both individual files and directories.
-
-```bash
-# Copy a single file
-usb-explore copy /etc/nginx/nginx.conf ./nginx.conf
-
-# Copy a whole directory
-usb-explore copy /etc ./etc-backup
-```
-
----
-
-### `archive` — extract a directory as a compressed archive
-
-```text
-usb-explore archive [-i usb.img] [-p N] <src-path> <dest>
-```
-
-Creates a compressed archive of `<src-path>` (absolute path within the
-partition) at `<dest>` on your Mac. The compression format is determined
-by the file extension.
-
-| Extension | Compression |
-| --- | --- |
-| `.tar.gz`, `.tgz` | gzip |
-| `.tar.bz2`, `.tbz2` | bzip2 |
-| `.tar.xz`, `.txz` | xz |
-| `.tar` | none |
-
-```bash
-# Archive the /etc directory as a gzip tarball
-usb-explore archive /etc ./usb-etc.tar.gz
-
-# Archive a single log file with bzip2
-usb-explore archive /var/log/syslog ./syslog.tar.bz2
-
-# Uncompressed tar of the home directory
-usb-explore archive /home ./usb-home.tar
-```
-
-The archive preserves the top-level directory name (e.g. archiving `/etc`
-produces a `etc/…` tree inside the tarball).
-
----
-
-### `run` — run a command against the image
-
-```text
-usb-explore run [-i usb.img] [-p N] [--] <command> [args…]
-```
-
-Runs a command inside the container with the partition mounted. Arguments
-that start with `/` are automatically prefixed with `/mnt/part` so you
-can write natural Linux paths.
-
-```bash
-# Find all config files
-usb-explore run -- find /etc -name '*.conf'
-
-# Check disk usage
-usb-explore run -- du -sh /home/*
-
-# Pipe the output through local tools
-usb-explore run -- cat /etc/os-release | grep VERSION
-```
-
----
-
-### `diff` — compare the image against a local reference
-
-```text
-usb-explore diff [-i usb.img] [-p N] <image-path> <reference-path>
-```
-
-Diffs a path inside the partition against a path on your Mac. Exit code
-follows `diff`: 0 = identical, 1 = differences found, 2 = error.
-
-```bash
-# Compare the image /etc against a known-good reference
-usb-explore diff /etc ./reference/etc
-
-# Check whether a config file changed
-usb-explore diff /etc/fstab ./expected-fstab
-```
-
----
-
-### `find` — search for files or content
+#### `find` — search for files or content
 
 ```text
 usb-explore find [-i usb.img] [-p N] [NAME-GLOB] [--grep PATTERN]
@@ -356,36 +319,30 @@ finds no matches (standard `grep` behaviour).
 
 ---
 
-### `hash` — verify file integrity
+#### `run` — run a command against the image
 
 ```text
-usb-explore hash [-i usb.img] [-p N] <path>
+usb-explore run [-i usb.img] [-p N] [--] <command> [args…]
 ```
 
-Prints the SHA-256 checksum of a single file from the partition without
-extracting it to disk first. Useful for forensic verification or
-confirming that a configuration file matches a known-good value.
-
-Output format is identical to `sha256sum(1)`:
-
-```text
-<64-hex-digits>  <path>
-```
+Runs a command inside the container with the partition mounted. Arguments
+that start with `/` are automatically prefixed with `/mnt/part` so you
+can write natural Linux paths.
 
 ```bash
-# Verify a kernel image
-usb-explore hash /boot/vmlinuz
+# Find all config files
+usb-explore run -- find /etc -name '*.conf'
 
-# Compare the result against a reference hash
-usb-explore hash /etc/passwd | sha256sum --check expected-hashes.txt
+# Check disk usage
+usb-explore run -- du -sh /home/*
+
+# Pipe the output through local tools
+usb-explore run -- cat /etc/os-release | grep VERSION
 ```
-
-The `<path>` argument must be absolute and must point to a file, not a
-directory.
 
 ---
 
-### `serve` — browse the partition over HTTP
+#### `serve` — browse the partition over HTTP
 
 ```text
 usb-explore serve [-i usb.img] [-p N] [--port PORT]
@@ -414,32 +371,96 @@ read-only; no files can be modified or uploaded.
 
 ---
 
-### `clean` — remove the disk image
+### Expert tools
+
+For forensic verification, structured archiving, and scripting use cases.
+
+#### `archive` — create a compressed archive
 
 ```text
-usb-explore clean [-i usb.img] [-y|--yes]
+usb-explore archive [-i usb.img] [-p N] <src-path> <dest>
 ```
 
-Removes the captured disk image file. Prompts for confirmation unless
-`-y` / `--yes` is given. Does not require Docker.
+Creates a compressed archive of `<src-path>` (absolute path within the
+partition) at `<dest>` on your Mac. The compression format is determined
+by the file extension.
+
+| Extension | Compression |
+| --- | --- |
+| `.tar.gz`, `.tgz` | gzip |
+| `.tar.bz2`, `.tbz2` | bzip2 |
+| `.tar.xz`, `.txz` | xz |
+| `.tar` | none |
 
 ```bash
-# Interactive confirmation prompt
-usb-explore clean
+# Archive the /etc directory as a gzip tarball
+usb-explore archive /etc ./usb-etc.tar.gz
 
-# Skip the prompt (useful in scripts)
-usb-explore clean --yes
+# Archive a single log file with bzip2
+usb-explore archive /var/log/syslog ./syslog.tar.bz2
 
-# Remove a specific image file
-usb-explore --image /Volumes/backup/my-usb.img clean --yes
+# Uncompressed tar of the home directory
+usb-explore archive /home ./usb-home.tar
 ```
 
-Exit code: 0 on success or when the user declines; 4 if the file does
-not exist.
+The archive preserves the top-level directory name (e.g. archiving `/etc`
+produces a `etc/…` tree inside the tarball).
 
 ---
 
-### `build` — rebuild the Docker image from source
+#### `diff` — compare the image against a local reference
+
+```text
+usb-explore diff [-i usb.img] [-p N] <image-path> <reference-path>
+```
+
+Diffs a path inside the partition against a path on your Mac. Exit code
+follows `diff`: 0 = identical, 1 = differences found, 2 = error.
+
+```bash
+# Compare the image /etc against a known-good reference
+usb-explore diff /etc ./reference/etc
+
+# Check whether a config file changed
+usb-explore diff /etc/fstab ./expected-fstab
+```
+
+---
+
+#### `hash` — verify file integrity
+
+```text
+usb-explore hash [-i usb.img] [-p N] <path>
+```
+
+Prints the SHA-256 checksum of a single file from the partition without
+extracting it to disk first. Useful for forensic verification or
+confirming that a configuration file matches a known-good value.
+
+Output format is identical to `sha256sum(1)`:
+
+```text
+<64-hex-digits>  <path>
+```
+
+```bash
+# Verify a kernel image
+usb-explore hash /boot/vmlinuz
+
+# Compare the result against a reference hash
+usb-explore hash /etc/passwd | sha256sum --check expected-hashes.txt
+```
+
+The `<path>` argument must be absolute and must point to a file, not a
+directory.
+
+---
+
+### Developer
+
+Only needed when modifying `usb-explore` itself.
+
+#### `build` — rebuild the Docker image from source
 
 ```text
 usb-explore build [--no-cache]

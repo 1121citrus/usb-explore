@@ -71,6 +71,12 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `README.md`: documented all six new subcommands with synopsis,
   option tables, and usage examples; updated table of contents and
   quick-start workflow.
+- `README.md`: reorganised the Subcommands section into four functional
+  groups — **Core workflow** (capture, clean, copy, info, shell),
+  **Exploration and search** (browse, find, run, serve), **Expert
+  tools** (archive, diff, hash), and **Developer** (build). Commands
+  are lexically sorted within each group. Group headings appear in the
+  table of contents with short descriptions.
 
 ---
 
