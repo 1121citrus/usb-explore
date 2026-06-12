@@ -15,6 +15,19 @@ handles that part.
 - [Prerequisites](#prerequisites)
 - [Architecture overview](#architecture-overview)
 - [Subcommands](#subcommands)
+  - [capture](#capture--copy-a-usb-drive-to-a-disk-image)
+  - [info](#info--show-the-partition-table)
+  - [shell](#shell--browse-interactively)
+  - [browse](#browse--visual-file-manager)
+  - [copy](#copy--copy-files-out-of-the-image)
+  - [archive](#archive--extract-a-directory-as-a-compressed-archive)
+  - [run](#run--run-a-command-against-the-image)
+  - [diff](#diff--compare-the-image-against-a-local-reference)
+  - [find](#find--search-for-files-or-content)
+  - [hash](#hash--verify-file-integrity)
+  - [serve](#serve--browse-the-partition-over-http)
+  - [clean](#clean--remove-the-disk-image)
+  - [build](#build--rebuild-the-docker-image-from-source)
 - [Partition selection](#partition-selection)
 - [Configuration](#configuration)
 - [Building from source](#building-from-source)
@@ -50,14 +63,18 @@ usb-explore capture /dev/disk4
 # 3. See what is on it
 usb-explore info
 
-# 4. Browse interactively
+# 4. Browse interactively (shell or visual file manager)
 usb-explore shell
+usb-explore browse
 
 # 5. — or — copy a specific file out
 usb-explore copy /etc/fstab ./fstab
 
 # 6. — or — run a command against the image
 usb-explore run -- find /home -name '*.log'
+
+# 7. When you are done, remove the image file
+usb-explore clean
 ```
 
 The drive image is saved as `usb.img` in the current directory. You can
@@ -189,6 +206,28 @@ The partition is mounted **read-only**. You cannot modify the image.
 
 ---
 
+### `browse` — visual file manager
+
+```text
+usb-explore browse [-i usb.img] [-p N]
+```
+
+Opens [Midnight Commander](https://midnight-commander.org/) (`mc`) at the
+partition root inside the container. Useful for visually navigating
+directories, previewing files, and comparing directory trees without
+typing paths by hand. `ncdu` is also available inside the shell for
+interactive disk-usage analysis.
+
+```bash
+usb-explore browse
+# Midnight Commander opens, rooted at the partition
+# Press F10 or q to quit
+```
+
+Requires a terminal (TTY). Cannot be used in a pipe or non-interactive script.
+
+---
+
 ### `copy` — copy files out of the image
 
 ```text
@@ -205,6 +244,39 @@ usb-explore copy /etc/nginx/nginx.conf ./nginx.conf
 # Copy a whole directory
 usb-explore copy /etc ./etc-backup
 ```
+
+---
+
+### `archive` — extract a directory as a compressed archive
+
+```text
+usb-explore archive [-i usb.img] [-p N] <src-path> <dest>
+```
+
+Creates a compressed archive of `<src-path>` (absolute path within the
+partition) at `<dest>` on your Mac. The compression format is determined
+by the file extension.
+
+| Extension | Compression |
+| --- | --- |
+| `.tar.gz`, `.tgz` | gzip |
+| `.tar.bz2`, `.tbz2` | bzip2 |
+| `.tar.xz`, `.txz` | xz |
+| `.tar` | none |
+
+```bash
+# Archive the /etc directory as a gzip tarball
+usb-explore archive /etc ./usb-etc.tar.gz
+
+# Archive a single log file with bzip2
+usb-explore archive /var/log/syslog ./syslog.tar.bz2
+
+# Uncompressed tar of the home directory
+usb-explore archive /home ./usb-home.tar
+```
+
+The archive preserves the top-level directory name (e.g. archiving `/etc`
+produces a `etc/…` tree inside the tarball).
 
 ---
 
@@ -247,6 +319,123 @@ usb-explore diff /etc ./reference/etc
 # Check whether a config file changed
 usb-explore diff /etc/fstab ./expected-fstab
 ```
+
+---
+
+### `find` — search for files or content
+
+```text
+usb-explore find [-i usb.img] [-p N] [NAME-GLOB] [--grep PATTERN]
+```
+
+Searches the partition by filename, file contents, or both. Output paths
+are partition-relative and can be passed directly to `copy`, `archive`,
+`diff`, or `hash`.
+
+| Option | Description |
+| --- | --- |
+| `NAME-GLOB` | Match filenames (e.g. `"*.log"`, `"hostname"`) |
+| `--grep PATTERN` | Search inside files (grep `-E` syntax) |
+
+At least one of `NAME-GLOB` or `--grep` is required; both may be
+combined to restrict content matches to a specific filename pattern.
+
+```bash
+# Find all .conf files
+usb-explore find "*.conf"
+
+# Find files containing a specific string
+usb-explore find --grep "PermitRootLogin"
+
+# Find only sshd_config files that mention PermitRootLogin
+usb-explore find "sshd_config" --grep "PermitRootLogin"
+```
+
+Exit code: 0 for a name search regardless of matches; 1 when `--grep`
+finds no matches (standard `grep` behaviour).
+
+---
+
+### `hash` — verify file integrity
+
+```text
+usb-explore hash [-i usb.img] [-p N] <path>
+```
+
+Prints the SHA-256 checksum of a single file from the partition without
+extracting it to disk first. Useful for forensic verification or
+confirming that a configuration file matches a known-good value.
+
+Output format is identical to `sha256sum(1)`:
+
+```text
+<64-hex-digits>  <path>
+```
+
+```bash
+# Verify a kernel image
+usb-explore hash /boot/vmlinuz
+
+# Compare the result against a reference hash
+usb-explore hash /etc/passwd | sha256sum --check expected-hashes.txt
+```
+
+The `<path>` argument must be absolute and must point to a file, not a
+directory.
+
+---
+
+### `serve` — browse the partition over HTTP
+
+```text
+usb-explore serve [-i usb.img] [-p N] [--port PORT]
+```
+
+Starts a read-only HTTP file server on your Mac. Open the printed URL in
+any browser to navigate the partition as a directory listing and download
+individual files. Press Ctrl-C to stop the server.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--port PORT` | 8080 | Host port for the HTTP server |
+
+```bash
+# Start on the default port 8080
+usb-explore serve
+# Serving partition 2 at http://localhost:8080/
+# Press Ctrl-C to stop.
+
+# Use a different port
+usb-explore serve --port 9090
+```
+
+The browser opens automatically on macOS. The partition is served
+read-only; no files can be modified or uploaded.
+
+---
+
+### `clean` — remove the disk image
+
+```text
+usb-explore clean [-i usb.img] [-y|--yes]
+```
+
+Removes the captured disk image file. Prompts for confirmation unless
+`-y` / `--yes` is given. Does not require Docker.
+
+```bash
+# Interactive confirmation prompt
+usb-explore clean
+
+# Skip the prompt (useful in scripts)
+usb-explore clean --yes
+
+# Remove a specific image file
+usb-explore --image /Volumes/backup/my-usb.img clean --yes
+```
+
+Exit code: 0 on success or when the user declines; 4 if the file does
+not exist.
 
 ---
 
