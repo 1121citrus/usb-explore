@@ -8,6 +8,7 @@
 
 bats_require_minimum_version 1.5.0
 SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
+DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
 
 # ---------------------------------------------------------------------------
 # --help / -h
@@ -355,4 +356,28 @@ EOF
     run env PATH="${stub}:${PATH}" bash "${SCRIPT}" --image "${tmp}" -p 1 serve
     rm -f "${tmp}"; rm -rf "${stub}"
     [ "${status}" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Static-analysis — shell: bracketed-paste suppression and cursor cleanup
+#
+# When 'shell' exits (typed 'exit' or Ctrl-D), bash's interactive shutdown
+# prints a spurious 'exit' line to the terminal.  Two invariants prevent
+# regression:
+#   1. dispatch.sh do_shell sets enable-bracketed-paste off via INPUTRC so
+#      readline does not emit [?2004h/l sequences that shift cursor position.
+#   2. src/usb-explore do_shell emits \033[1A\033[2K\r after run_container
+#      returns to erase the trailing artefact line.
+# ---------------------------------------------------------------------------
+
+@test "shell: dispatch.sh do_shell disables bracketed-paste via INPUTRC" {
+    grep -q 'enable-bracketed-paste off' "${DISPATCH}"
+}
+
+@test "shell: dispatch.sh do_shell exports INPUTRC before exec bash" {
+    grep -q 'INPUTRC=.*exec bash' "${DISPATCH}"
+}
+
+@test "shell: host do_shell emits cursor-up+clear-line escape after normal exit" {
+    grep -q '\\033\[1A\\033\[2K' "${SCRIPT}"
 }
