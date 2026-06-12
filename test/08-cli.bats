@@ -418,3 +418,23 @@ EOF
 @test "container do_run: filters /mnt/part from output via sed" {
     grep -q "sed 's|/mnt/part/|/|g'" "${DISPATCH}"
 }
+
+# ---------------------------------------------------------------------------
+# Static-analysis — browse: terminal reset on exit
+#
+# mc enables mouse-tracking and alternate-screen modes and does not always
+# disable them when it exits.  If 'exec mc' were used, the dispatch process
+# would be replaced by mc with no opportunity to clean up.  The fix removes
+# 'exec' so dispatch.sh stays alive after mc exits and can emit \033c (VT100
+# Reset to Initial State) before the container exits.  \033c disables mouse
+# tracking, exits the alternate screen, and resets SGR attributes, preventing
+# stray escape sequences from leaking into the host terminal.
+# ---------------------------------------------------------------------------
+
+@test "browse: dispatch.sh do_browse emits VT100 RIS escape before exit" {
+    grep -q 'printf.*\\033c' "${DISPATCH}"
+}
+
+@test "browse: dispatch.sh do_browse does not exec mc (allows RIS cleanup to run)" {
+    run ! grep -qE '^[[:space:]]*exec mc' "${DISPATCH}"
+}
