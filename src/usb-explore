@@ -871,6 +871,9 @@ do_serve() {
     local port=8080
     while [[ $# -gt 0 ]]; do
         case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
             --port)
                 [[ -n "${2:-}" ]] || die "--port requires a number"
                 port="${2}"; shift ;;
@@ -906,6 +909,17 @@ do_serve() {
 # ---------------------------------------------------------------------------
 
 do_shell() {
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown shell option: ${1}" ;;
+            *)  die "Unexpected argument: ${1}" ;;
+        esac
+        shift
+    done
+
     check_docker
     check_image_file
     ensure_image

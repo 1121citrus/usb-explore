@@ -9,6 +9,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `shell` and `serve` subcommands now accept `-p|--partition N` as a
+  per-subcommand flag. Previously both functions had no argument parser,
+  so a partition specified after the subcommand name (e.g.
+  `usb-explore shell -p 4`) was silently ignored and `select-partition`
+  fell through to the multi-partition error even when the user had
+  explicitly selected a partition.
+
 ---
 
 ## [1.0.0] — 2026-06-12
