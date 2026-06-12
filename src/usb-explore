@@ -24,6 +24,12 @@
 #             Start an interactive bash shell with a partition mounted
 #             at /mnt/part inside the container.
 #
+#   browse  [-i|--image PATH] [-p|--partition N]
+#             Launch Midnight Commander (mc) at the partition root for
+#             visual twin-panel navigation. Requires a terminal (TTY).
+#             Press F10 or q to quit. ncdu is also available inside
+#             the container for disk-usage analysis.
+#
 #   copy    [-i|--image PATH] [-p|--partition N] <src-path> <dest>
 #             Copy <src-path> (absolute within the partition) to <dest>
 #             on the host. Directories are copied recursively.
@@ -556,6 +562,37 @@ do_shell() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: browse
+# ---------------------------------------------------------------------------
+
+# Launch Midnight Commander at the partition root for visual navigation.
+# Args:
+#   [-p|--partition N]  override auto-detected partition number
+# Returns:
+#   Exit code from mc; container must be attached to a TTY.
+do_browse() {
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown browse option: ${1}" ;;
+            *) die "Unexpected argument: ${1}" ;;
+        esac
+        shift
+    done
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    run_container \
+        -i -t \
+        "${IMAGE_REF}" browse
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: copy
 # ---------------------------------------------------------------------------
 
@@ -791,7 +828,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        build|capture|info|shell|copy|archive|run|diff|serve)
+        build|capture|info|shell|browse|copy|archive|run|diff|serve)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -808,6 +845,7 @@ case "${SUBCOMMAND}" in
     capture) do_capture "$@" ;;
     info)    do_info    "$@" ;;
     shell)   do_shell   "$@" ;;
+    browse)  do_browse  "$@" ;;
     copy)    do_copy    "$@" ;;
     archive) do_archive "$@" ;;
     run)     do_run     "$@" ;;

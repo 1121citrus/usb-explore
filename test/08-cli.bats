@@ -37,6 +37,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"diff"*    ]]
     [[ "${output}" == *"serve"*   ]]
     [[ "${output}" == *"archive"* ]]
+    [[ "${output}" == *"browse"*  ]]
 }
 
 @test "cli: -h is an alias for --help" {
@@ -164,6 +165,11 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     run bash "${SCRIPT}" serve --port notanumber
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"65535"* ]]
+}
+
+@test "cli: 'browse' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" browse
+    [ "${status}" -ne 2 ]
 }
 
 @test "cli: 'archive' subcommand is routed (not a usage error)" {

@@ -219,6 +219,22 @@ do_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: browse
+# ---------------------------------------------------------------------------
+
+# Launch Midnight Commander (mc) rooted at the mounted partition.
+# Requires a TTY; the host wrapper always passes -i -t.
+# Args:
+#   None
+# Returns:
+#   Exit code from mc; runs until the user quits the file manager.
+do_browse() {
+    mount_partition
+    cd /mnt/part
+    exec mc /mnt/part
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: archive
 # ---------------------------------------------------------------------------
 
@@ -300,6 +316,7 @@ do_diff() {
 case "${SUBCOMMAND}" in
     info)    do_info    "$@" ;;
     shell)   do_shell   "$@" ;;
+    browse)  do_browse  "$@" ;;
     copy)    do_copy    "$@" ;;
     archive) do_archive "$@" ;;
     run)     do_run     "$@" ;;

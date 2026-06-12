@@ -50,6 +50,16 @@ run_in_image() {
     [ "${status}" -eq 0 ]
 }
 
+@test "image: mc is present" {
+    run run_in_image 'command -v mc'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: ncdu is present" {
+    run run_in_image 'command -v ncdu'
+    [ "${status}" -eq 0 ]
+}
+
 # ---------------------------------------------------------------------------
 # Required directories
 # ---------------------------------------------------------------------------

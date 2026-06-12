@@ -49,6 +49,8 @@ RUN apt-get update \
       python3 \
       bzip2 \
       xz-utils \
+      mc \
+      ncdu \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/container/ /usr/local/lib/usb-explore/
