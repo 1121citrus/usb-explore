@@ -206,6 +206,16 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [ "${status}" -ne 2 ]
 }
 
+@test "cli: 'shell' accepts -p after subcommand name" {
+    run bash "${SCRIPT}" --image /nonexistent.img shell -p 2
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'serve' accepts -p after subcommand name" {
+    run bash "${SCRIPT}" --image /nonexistent.img serve -p 2
+    [ "${status}" -ne 2 ]
+}
+
 # ---------------------------------------------------------------------------
 # capture --dry-run (no device or Docker required)
 # ---------------------------------------------------------------------------
