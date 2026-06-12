@@ -219,6 +219,52 @@ do_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: archive
+# ---------------------------------------------------------------------------
+
+# Create a compressed archive of a partition path and write it to /out/.
+# Args:
+#   $1  src-path — absolute path within the mounted partition
+#   $2  archive-name — output filename; compression from extension
+#         .tar.gz / .tgz  → gzip
+#         .tar.bz2 / .tbz2 → bzip2
+#         .tar.xz / .txz   → xz
+#         .tar              → no compression
+# Returns:
+#   0 on success; 1 on path-not-found or unrecognised extension
+do_archive() {
+    local src="${1}" archive_name="${2}"
+    mount_partition
+
+    local src_abs="/mnt/part/${src#/}"
+    if [[ ! -e "${src_abs}" ]]; then
+        echo "error: path not found in image: ${src}" >&2
+        exit 1
+    fi
+
+    # Infer compression flag from archive name extension
+    local compress=""
+    case "${archive_name}" in
+        *.tar.gz|*.tgz)   compress="-z" ;;
+        *.tar.bz2|*.tbz2) compress="-j" ;;
+        *.tar.xz|*.txz)   compress="-J" ;;
+        *.tar)             compress=""   ;;
+        *)
+            echo "error: unrecognised archive extension: ${archive_name}" >&2
+            echo "       Supported: .tar.gz .tgz .tar.bz2 .tbz2 .tar.xz .txz .tar" >&2
+            exit 1 ;;
+    esac
+
+    # Build tar argument list; preserve the source entry name at archive root
+    local tar_args=()
+    [[ -n "${compress}" ]] && tar_args+=("${compress}")
+    tar_args+=(-f "/out/${archive_name}" \
+                -C "$(dirname "${src_abs}")" \
+                "$(basename "${src_abs}")")
+    tar -c "${tar_args[@]}"
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: serve
 # ---------------------------------------------------------------------------
 
@@ -252,12 +298,13 @@ do_diff() {
 # ---------------------------------------------------------------------------
 
 case "${SUBCOMMAND}" in
-    info)  do_info  "$@" ;;
-    shell) do_shell "$@" ;;
-    copy)  do_copy  "$@" ;;
-    run)   do_run   "$@" ;;
-    diff)  do_diff  "$@" ;;
-    serve) do_serve "$@" ;;
+    info)    do_info    "$@" ;;
+    shell)   do_shell   "$@" ;;
+    copy)    do_copy    "$@" ;;
+    archive) do_archive "$@" ;;
+    run)     do_run     "$@" ;;
+    diff)    do_diff    "$@" ;;
+    serve)   do_serve   "$@" ;;
     *)
         echo "error: unknown subcommand '${SUBCOMMAND}'" >&2
         exit 2 ;;

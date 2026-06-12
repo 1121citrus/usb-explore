@@ -36,6 +36,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"run"*     ]]
     [[ "${output}" == *"diff"*    ]]
     [[ "${output}" == *"serve"*   ]]
+    [[ "${output}" == *"archive"* ]]
 }
 
 @test "cli: -h is an alias for --help" {
@@ -163,6 +164,23 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     run bash "${SCRIPT}" serve --port notanumber
     [ "${status}" -ne 0 ]
     [[ "${output}" == *"65535"* ]]
+}
+
+@test "cli: 'archive' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" archive /etc ./etc.tar.gz
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'archive' subcommand reports missing arguments" {
+    run bash "${SCRIPT}" archive
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: 'archive' rejects unsupported extension" {
+    run bash "${SCRIPT}" archive /etc ./etc.zip
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"unsupported"* ]]
 }
 
 # ---------------------------------------------------------------------------

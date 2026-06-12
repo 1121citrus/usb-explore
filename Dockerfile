@@ -47,6 +47,8 @@ RUN apt-get update \
       file \
       jq \
       python3 \
+      bzip2 \
+      xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/container/ /usr/local/lib/usb-explore/

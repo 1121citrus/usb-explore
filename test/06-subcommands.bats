@@ -6,9 +6,17 @@ FIXTURES="${BATS_TEST_DIRNAME}/../fixtures"
 
 setup() {
     TMPDIR_WORK=$(mktemp -d)
+    # SERVE_CID holds the ID of a detached serve container started by a test;
+    # teardown() stops it so the test body never needs trap EXIT (which would
+    # replace bats' own EXIT handler and suppress the TAP result line).
+    SERVE_CID=""
 }
 
 teardown() {
+    if [[ -n "${SERVE_CID}" ]]; then
+        docker stop "${SERVE_CID}" >/dev/null 2>&1 || true
+        SERVE_CID=""
+    fi
     rm -rf "${TMPDIR_WORK}"
 }
 
@@ -199,16 +207,11 @@ run_single() {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
 
     local port=19080
-    local cid
-    cid=$(docker run --rm -d --privileged \
+    SERVE_CID=$(docker run --rm -d --privileged \
         -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
         -e "USB_PARTITION=2" \
         -p "${port}:8080" \
         "${IMAGE}" serve)
-
-    # Stop the container when the test exits regardless of outcome
-    # shellcheck disable=SC2064
-    trap "docker stop ${cid} >/dev/null 2>&1 || true" EXIT
 
     # Wait up to 10 s for the HTTP server to respond
     local ready=false
@@ -230,15 +233,11 @@ run_single() {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
 
     local port=19081
-    local cid
-    cid=$(docker run --rm -d --privileged \
+    SERVE_CID=$(docker run --rm -d --privileged \
         -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
         -e "USB_PARTITION=2" \
         -p "${port}:8080" \
         "${IMAGE}" serve)
-
-    # shellcheck disable=SC2064
-    trap "docker stop ${cid} >/dev/null 2>&1 || true" EXIT
 
     local ready=false
     for _ in $(seq 1 20); do
@@ -252,6 +251,72 @@ run_single() {
     run curl -sf "http://localhost:${port}/etc/hostname"
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# archive
+# ---------------------------------------------------------------------------
+
+@test "subcommand archive: creates .tar.gz from a partition directory" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/archive-out"
+    mkdir -p "${outdir}"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" archive /etc etc.tar.gz
+
+    [ "${status}" -eq 0 ]
+    [[ -f "${outdir}/etc.tar.gz" ]]
+}
+
+@test "subcommand archive: .tar.gz contains expected files" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/archive-contents"
+    mkdir -p "${outdir}"
+
+    docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" archive /etc etc.tar.gz
+
+    run tar -tzf "${outdir}/etc.tar.gz"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"hostname"* ]]
+}
+
+@test "subcommand archive: archives a single file as .tar" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/archive-single"
+    mkdir -p "${outdir}"
+
+    docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" archive /etc/hostname hostname.tar
+
+    run tar -xOf "${outdir}/hostname.tar"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+@test "subcommand archive: exits 1 for non-existent source path" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/archive-missing"
+    mkdir -p "${outdir}"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" archive /does/not/exist missing.tar.gz
+
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not found"* ]]
 }
 
 # ---------------------------------------------------------------------------

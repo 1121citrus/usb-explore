@@ -28,6 +28,12 @@
 #             Copy <src-path> (absolute within the partition) to <dest>
 #             on the host. Directories are copied recursively.
 #
+#   archive [-i|--image PATH] [-p|--partition N] <src-path> <dest>
+#             Create a compressed archive of <src-path> (absolute within
+#             the partition) at <dest> on the host. Compression format is
+#             inferred from the file extension:
+#             .tar.gz / .tgz  .tar.bz2 / .tbz2  .tar.xz / .txz  .tar
+#
 #   run     [-i|--image PATH] [-p|--partition N] [--] <cmd> [args...]
 #             Run a command inside the container with the partition
 #             mounted. Arguments starting with / are automatically
@@ -597,6 +603,70 @@ do_copy() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: archive
+# ---------------------------------------------------------------------------
+
+# Create a compressed archive of a partition path on the host.
+# Args:
+#   [-p|--partition N]  override auto-detected partition number
+#   <src-path>          absolute path within the partition
+#   <dest>              host output path; extension determines compression
+# Returns:
+#   0 on success; non-zero on bad arguments, Docker error, or missing path
+do_archive() {
+    local src="" dest=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown archive option: ${1}" ;;
+            *)
+                if [[ -z "${src}" ]]; then
+                    src="${1}"
+                elif [[ -z "${dest}" ]]; then
+                    dest="${1}"
+                else
+                    die "Unexpected argument: ${1}"
+                fi ;;
+        esac
+        shift
+    done
+
+    [[ -n "${src}" ]]  || die "archive requires <src-path>"
+    [[ -n "${dest}" ]] || die "archive requires <dest>"
+    [[ "${src}" == /* ]] || die "<src-path> must be absolute (start with /)"
+
+    local out_name
+    out_name="$(basename "${dest}")"
+
+    # Validate extension locally for immediate feedback before Docker spin-up
+    case "${out_name}" in
+        *.tar.gz|*.tgz|*.tar.bz2|*.tbz2|*.tar.xz|*.txz|*.tar) ;;
+        *) die "unsupported archive format: ${out_name}
+       Supported extensions: .tar.gz .tgz .tar.bz2 .tbz2 .tar.xz .txz .tar" ;;
+    esac
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+    set_tty_flags
+
+    # Resolve host-side output directory; create if needed
+    local out_dir
+    local dest_parent
+    dest_parent="$(dirname "${dest}")"
+    mkdir -p "${dest_parent}"
+    out_dir="$(cd "${dest_parent}" && pwd)"
+
+    run_container \
+        -v "${out_dir}:/out" \
+        "${TTY_FLAGS[@]}" \
+        "${IMAGE_REF}" archive "${src}" "${out_name}"
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: run
 # ---------------------------------------------------------------------------
 
@@ -721,7 +791,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        build|capture|info|shell|copy|run|diff|serve)
+        build|capture|info|shell|copy|archive|run|diff|serve)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -739,6 +809,7 @@ case "${SUBCOMMAND}" in
     info)    do_info    "$@" ;;
     shell)   do_shell   "$@" ;;
     copy)    do_copy    "$@" ;;
+    archive) do_archive "$@" ;;
     run)     do_run     "$@" ;;
     diff)    do_diff    "$@" ;;
     serve)   do_serve   "$@" ;;
