@@ -9,6 +9,49 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+#### Host CLI (`src/usb-explore`)
+
+- `serve` — start a read-only HTTP directory server over the mounted
+  partition. Accepts `--port PORT` (default 8080). Opens the browser
+  automatically on macOS.
+- `browse` — launch Midnight Commander (`mc`) at the partition root for
+  visual twin-panel navigation. `ncdu` is also available inside the
+  container for disk-usage analysis.
+- `archive` — create a compressed archive of a partition path on the
+  host. Compression format inferred from extension: `.tar.gz` / `.tgz`,
+  `.tar.bz2` / `.tbz2`, `.tar.xz` / `.txz`, `.tar`.
+- `find` — search the partition by filename glob, file contents
+  (`--grep PATTERN`), or both. Output paths are partition-relative
+  and usable directly with `copy`, `archive`, `diff`, and `hash`.
+  Exit code 1 when `--grep` finds no matches (standard grep behaviour).
+- `hash` — print the SHA-256 checksum of a single file from the
+  partition without extracting it. Output is identical to `sha256sum(1)`.
+  Exits 1 if the path does not exist or is a directory.
+- `clean` — remove the captured disk image file with a confirmation
+  prompt. `-y|--yes` skips the prompt. Exits 4 if the file does not
+  exist. Does not require Docker.
+
+#### Docker image
+
+- Added packages: `python3` (required by `serve`), `bzip2` and
+  `xz-utils` (required by `archive`), `mc` and `ncdu` (required by
+  `browse`).
+
+### Changed
+
+- All subcommand declarations (SYNOPSIS, function definitions, routing
+  guard, and dispatch case in `src/usb-explore`; function definitions
+  and dispatch case in `src/container/dispatch.sh`) are now in
+  lexical order throughout the codebase.
+
+### Documentation
+
+- `README.md`: documented all six new subcommands with synopsis,
+  option tables, and usage examples; updated table of contents and
+  quick-start workflow.
+
 ---
 
 ## [0.1.1] — 2026-06-12
