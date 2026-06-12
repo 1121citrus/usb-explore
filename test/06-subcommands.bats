@@ -29,231 +29,6 @@ run_single() {
 }
 
 # ---------------------------------------------------------------------------
-# shell (non-interactive: run a command and exit)
-# ---------------------------------------------------------------------------
-
-@test "subcommand shell: partition is mounted and accessible via run subcommand" {
-    # shell is interactive; verify the partition mounts by using 'run' which
-    # exercises the same mount_partition path without requiring a tty.
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" run ls /mnt/part
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"etc"* ]]
-}
-
-# ---------------------------------------------------------------------------
-# copy
-# ---------------------------------------------------------------------------
-
-@test "subcommand copy: copies /etc/hostname from ext4 partition to host" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    local outdir="${TMPDIR_WORK}/copy-out"
-    mkdir -p "${outdir}"
-
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -v "${outdir}:/out" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" copy /etc/hostname hostname
-
-    [ "${status}" -eq 0 ]
-    [[ -f "${outdir}/hostname" ]]
-    grep -q "usb-explore-test" "${outdir}/hostname"
-}
-
-@test "subcommand copy: copies a directory from the partition" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    local outdir="${TMPDIR_WORK}/copy-etc"
-    mkdir -p "${outdir}"
-
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -v "${outdir}:/out" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" copy /etc etc
-
-    [ "${status}" -eq 0 ]
-    [[ -d "${outdir}/etc" ]]
-    [[ -f "${outdir}/etc/hostname" ]]
-}
-
-@test "subcommand copy: exits 1 for non-existent source path" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    local outdir="${TMPDIR_WORK}/copy-missing"
-    mkdir -p "${outdir}"
-
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -v "${outdir}:/out" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" copy /does/not/exist missing
-
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"not found"* ]]
-}
-
-# ---------------------------------------------------------------------------
-# run
-# ---------------------------------------------------------------------------
-
-@test "subcommand run: cat /mnt/part/etc/hostname returns expected content" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" run cat /mnt/part/etc/hostname
-
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"usb-explore-test"* ]]
-}
-
-@test "subcommand run: find works on /mnt/part" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" run find /mnt/part/etc -name hostname
-
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"hostname"* ]]
-}
-
-# ---------------------------------------------------------------------------
-# diff
-# ---------------------------------------------------------------------------
-
-@test "subcommand diff: identical file returns 0" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    # Copy the hostname out, then diff it back — should be identical
-    local refdir="${TMPDIR_WORK}/ref"
-    mkdir -p "${refdir}"
-
-    docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -v "${refdir}:/out" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" copy /etc/hostname hostname >/dev/null
-
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -v "${refdir}:/ref:ro" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" diff /etc/hostname hostname
-
-    [ "${status}" -eq 0 ]
-}
-
-@test "subcommand diff: different file returns 1" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-    local refdir="${TMPDIR_WORK}/ref-diff"
-    mkdir -p "${refdir}"
-    echo "something-different" > "${refdir}/hostname"
-
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -v "${refdir}:/ref:ro" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" diff /etc/hostname hostname
-
-    [ "${status}" -eq 1 ]
-}
-
-# ---------------------------------------------------------------------------
-# xfs.img (driver test)
-# ---------------------------------------------------------------------------
-
-@test "subcommand xfs: xfs partition is identified by info --json" {
-    [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture xfs.img not generated"
-    local fstype
-    fstype=$(docker run --rm --privileged \
-        -v "${FIXTURES}/xfs.img:/disk.img:ro" \
-        "${IMAGE}" info --json | \
-        docker run --rm -i --entrypoint=jq \
-            "${IMAGE}" -r '.partitions[] | select(.number == 2) | .fstype')
-    [ "${fstype}" = "xfs" ]
-}
-
-@test "subcommand xfs: can read hostname from xfs partition" {
-    [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture xfs.img not generated"
-
-    # Skip when /etc/hostname was not planted in the fixture (the generator
-    # skips the mount/write step when the xfs module is unavailable there).
-    local probe_status=0
-    docker run --rm --privileged \
-        -v "${FIXTURES}/xfs.img:/disk.img:ro" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" run ls /mnt/part/etc/hostname >/dev/null 2>&1 \
-        || probe_status=$?
-    [[ "${probe_status}" -eq 0 ]] \
-        || skip "xfs fixture has no /etc/hostname (generator skipped mount step)"
-
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/xfs.img:/disk.img:ro" \
-        -e "USB_PARTITION=2" \
-        "${IMAGE}" run cat /mnt/part/etc/hostname
-
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"xfs-test"* ]]
-}
-
-# ---------------------------------------------------------------------------
-# serve (HTTP directory server)
-# ---------------------------------------------------------------------------
-
-@test "subcommand serve: HTTP server returns directory listing for ext4 partition" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-
-    local port=19080
-    SERVE_CID=$(docker run --rm -d --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -e "USB_PARTITION=2" \
-        -p "${port}:8080" \
-        "${IMAGE}" serve)
-
-    # Wait up to 10 s for the HTTP server to respond
-    local ready=false
-    for _ in $(seq 1 20); do
-        sleep 0.5
-        if curl -sf "http://localhost:${port}/" >/dev/null 2>&1; then
-            ready=true; break
-        fi
-    done
-    [[ "${ready}" == true ]] || skip "HTTP server did not start within 10 s"
-
-    run curl -sf "http://localhost:${port}/"
-    [ "${status}" -eq 0 ]
-    # Directory listing should contain the 'etc' directory planted in the fixture
-    [[ "${output}" == *"etc"* ]]
-}
-
-@test "subcommand serve: individual file is retrievable via HTTP" {
-    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
-
-    local port=19081
-    SERVE_CID=$(docker run --rm -d --privileged \
-        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
-        -e "USB_PARTITION=2" \
-        -p "${port}:8080" \
-        "${IMAGE}" serve)
-
-    local ready=false
-    for _ in $(seq 1 20); do
-        sleep 0.5
-        if curl -sf "http://localhost:${port}/" >/dev/null 2>&1; then
-            ready=true; break
-        fi
-    done
-    [[ "${ready}" == true ]] || skip "HTTP server did not start within 10 s"
-
-    run curl -sf "http://localhost:${port}/etc/hostname"
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"usb-explore-test"* ]]
-}
-
-# ---------------------------------------------------------------------------
 # archive
 # ---------------------------------------------------------------------------
 
@@ -320,6 +95,97 @@ run_single() {
 }
 
 # ---------------------------------------------------------------------------
+# copy
+# ---------------------------------------------------------------------------
+
+@test "subcommand copy: copies /etc/hostname from ext4 partition to host" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/copy-out"
+    mkdir -p "${outdir}"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" copy /etc/hostname hostname
+
+    [ "${status}" -eq 0 ]
+    [[ -f "${outdir}/hostname" ]]
+    grep -q "usb-explore-test" "${outdir}/hostname"
+}
+
+@test "subcommand copy: copies a directory from the partition" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/copy-etc"
+    mkdir -p "${outdir}"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" copy /etc etc
+
+    [ "${status}" -eq 0 ]
+    [[ -d "${outdir}/etc" ]]
+    [[ -f "${outdir}/etc/hostname" ]]
+}
+
+@test "subcommand copy: exits 1 for non-existent source path" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local outdir="${TMPDIR_WORK}/copy-missing"
+    mkdir -p "${outdir}"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${outdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" copy /does/not/exist missing
+
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not found"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# diff
+# ---------------------------------------------------------------------------
+
+@test "subcommand diff: identical file returns 0" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    # Copy the hostname out, then diff it back — should be identical
+    local refdir="${TMPDIR_WORK}/ref"
+    mkdir -p "${refdir}"
+
+    docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${refdir}:/out" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" copy /etc/hostname hostname >/dev/null
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${refdir}:/ref:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" diff /etc/hostname hostname
+
+    [ "${status}" -eq 0 ]
+}
+
+@test "subcommand diff: different file returns 1" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local refdir="${TMPDIR_WORK}/ref-diff"
+    mkdir -p "${refdir}"
+    echo "something-different" > "${refdir}/hostname"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -v "${refdir}:/ref:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" diff /etc/hostname hostname
+
+    [ "${status}" -eq 1 ]
+}
+
+# ---------------------------------------------------------------------------
 # dirty-ext4.img (unclean journal — regression test for noload fix)
 # ---------------------------------------------------------------------------
 
@@ -332,21 +198,6 @@ run_single() {
 
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"dirty-ext4-test"* ]]
-}
-
-# ---------------------------------------------------------------------------
-# mbr.img (MBR layout)
-# ---------------------------------------------------------------------------
-
-@test "subcommand mbr: can read hostname from MBR ext4 partition 1" {
-    [[ -f "${FIXTURES}/mbr.img" ]] || skip "fixture mbr.img not generated"
-    run docker run --rm --privileged \
-        -v "${FIXTURES}/mbr.img:/disk.img:ro" \
-        -e "USB_PARTITION=1" \
-        "${IMAGE}" run cat /mnt/part/etc/hostname
-
-    [ "${status}" -eq 0 ]
-    [[ "${output}" == *"mbr-test"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -468,4 +319,153 @@ run_single() {
         "${IMAGE}" hash /etc
     [ "${status}" -eq 1 ]
     [[ "${output}" == *"directory"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# mbr.img (MBR layout)
+# ---------------------------------------------------------------------------
+
+@test "subcommand mbr: can read hostname from MBR ext4 partition 1" {
+    [[ -f "${FIXTURES}/mbr.img" ]] || skip "fixture mbr.img not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/mbr.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"mbr-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# run
+# ---------------------------------------------------------------------------
+
+@test "subcommand run: cat /mnt/part/etc/hostname returns expected content" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+@test "subcommand run: find works on /mnt/part" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run find /mnt/part/etc -name hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"hostname"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# serve (HTTP directory server)
+# ---------------------------------------------------------------------------
+
+@test "subcommand serve: HTTP server returns directory listing for ext4 partition" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port=19080
+    SERVE_CID=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port}:8080" \
+        "${IMAGE}" serve)
+
+    # Wait up to 10 s for the HTTP server to respond
+    local ready=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if curl -sf "http://localhost:${port}/" >/dev/null 2>&1; then
+            ready=true; break
+        fi
+    done
+    [[ "${ready}" == true ]] || skip "HTTP server did not start within 10 s"
+
+    run curl -sf "http://localhost:${port}/"
+    [ "${status}" -eq 0 ]
+    # Directory listing should contain the 'etc' directory planted in the fixture
+    [[ "${output}" == *"etc"* ]]
+}
+
+@test "subcommand serve: individual file is retrievable via HTTP" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port=19081
+    SERVE_CID=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port}:8080" \
+        "${IMAGE}" serve)
+
+    local ready=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if curl -sf "http://localhost:${port}/" >/dev/null 2>&1; then
+            ready=true; break
+        fi
+    done
+    [[ "${ready}" == true ]] || skip "HTTP server did not start within 10 s"
+
+    run curl -sf "http://localhost:${port}/etc/hostname"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# shell (non-interactive: run a command and exit)
+# ---------------------------------------------------------------------------
+
+@test "subcommand shell: partition is mounted and accessible via run subcommand" {
+    # shell is interactive; verify the partition mounts by using 'run' which
+    # exercises the same mount_partition path without requiring a tty.
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run ls /mnt/part
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"etc"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# xfs.img (driver test)
+# ---------------------------------------------------------------------------
+
+@test "subcommand xfs: xfs partition is identified by info --json" {
+    [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture xfs.img not generated"
+    local fstype
+    fstype=$(docker run --rm --privileged \
+        -v "${FIXTURES}/xfs.img:/disk.img:ro" \
+        "${IMAGE}" info --json | \
+        docker run --rm -i --entrypoint=jq \
+            "${IMAGE}" -r '.partitions[] | select(.number == 2) | .fstype')
+    [ "${fstype}" = "xfs" ]
+}
+
+@test "subcommand xfs: can read hostname from xfs partition" {
+    [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture xfs.img not generated"
+
+    # Skip when /etc/hostname was not planted in the fixture (the generator
+    # skips the mount/write step when the xfs module is unavailable there).
+    local probe_status=0
+    docker run --rm --privileged \
+        -v "${FIXTURES}/xfs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run ls /mnt/part/etc/hostname >/dev/null 2>&1 \
+        || probe_status=$?
+    [[ "${probe_status}" -eq 0 ]] \
+        || skip "xfs fixture has no /etc/hostname (generator skipped mount step)"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/xfs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"xfs-test"* ]]
 }

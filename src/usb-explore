@@ -8,6 +8,18 @@
 #   usb-explore <subcommand> [options] [arguments]
 #
 # SUBCOMMANDS
+#   archive [-i|--image PATH] [-p|--partition N] <src-path> <dest>
+#             Create a compressed archive of <src-path> (absolute within
+#             the partition) at <dest> on the host. Compression format is
+#             inferred from the file extension:
+#             .tar.gz / .tgz  .tar.bz2 / .tbz2  .tar.xz / .txz  .tar
+#
+#   browse  [-i|--image PATH] [-p|--partition N]
+#             Launch Midnight Commander (mc) at the partition root for
+#             visual twin-panel navigation. Requires a terminal (TTY).
+#             Press F10 or q to quit. ncdu is also available inside
+#             the container for disk-usage analysis.
+#
 #   build   [--no-cache]
 #             Build or rebuild the Docker image from local source.
 #
@@ -16,43 +28,18 @@
 #             Copy a USB device to a disk image file using dd.
 #             This is the only subcommand that does NOT use Docker.
 #
-#   info    [-i|--image PATH] [--json]
-#             Print the partition table and filesystem metadata.
-#             --json emits machine-readable JSON.
-#
-#   shell   [-i|--image PATH] [-p|--partition N]
-#             Start an interactive bash shell with a partition mounted
-#             at /mnt/part inside the container.
-#
-#   browse  [-i|--image PATH] [-p|--partition N]
-#             Launch Midnight Commander (mc) at the partition root for
-#             visual twin-panel navigation. Requires a terminal (TTY).
-#             Press F10 or q to quit. ncdu is also available inside
-#             the container for disk-usage analysis.
+#   clean   [-i|--image PATH] [-y|--yes]
+#             Remove the captured disk image file. Prompts for
+#             confirmation unless -y/--yes is given. Does not require
+#             Docker.
 #
 #   copy    [-i|--image PATH] [-p|--partition N] <src-path> <dest>
 #             Copy <src-path> (absolute within the partition) to <dest>
 #             on the host. Directories are copied recursively.
 #
-#   archive [-i|--image PATH] [-p|--partition N] <src-path> <dest>
-#             Create a compressed archive of <src-path> (absolute within
-#             the partition) at <dest> on the host. Compression format is
-#             inferred from the file extension:
-#             .tar.gz / .tgz  .tar.bz2 / .tbz2  .tar.xz / .txz  .tar
-#
-#   run     [-i|--image PATH] [-p|--partition N] [--] <cmd> [args...]
-#             Run a command inside the container with the partition
-#             mounted. Arguments starting with / are automatically
-#             prefixed with /mnt/part.
-#
 #   diff    [-i|--image PATH] [-p|--partition N] <image-path> <ref-path>
 #             Diff <image-path> (within the partition) against <ref-path>
 #             on the host. Exit code: 0=identical, 1=different, 2=error.
-#
-#   serve   [-i|--image PATH] [-p|--partition N] [--port PORT]
-#             Start a read-only HTTP file server on the host at
-#             http://localhost:PORT (default 8080), browseable in any
-#             web browser. Press Ctrl-C to stop.
 #
 #   find    [-i|--image PATH] [-p|--partition N]
 #             [--grep PATTERN] [NAME-GLOB]
@@ -68,10 +55,23 @@
 #             partition) without extracting the file to the host. Output
 #             format is identical to sha256sum(1): "<digest>  <path>".
 #
-#   clean   [-i|--image PATH] [-y|--yes]
-#             Remove the captured disk image file. Prompts for
-#             confirmation unless -y/--yes is given. Does not require
-#             Docker.
+#   info    [-i|--image PATH] [--json]
+#             Print the partition table and filesystem metadata.
+#             --json emits machine-readable JSON.
+#
+#   run     [-i|--image PATH] [-p|--partition N] [--] <cmd> [args...]
+#             Run a command inside the container with the partition
+#             mounted. Arguments starting with / are automatically
+#             prefixed with /mnt/part.
+#
+#   serve   [-i|--image PATH] [-p|--partition N] [--port PORT]
+#             Start a read-only HTTP file server on the host at
+#             http://localhost:PORT (default 8080), browseable in any
+#             web browser. Press Ctrl-C to stop.
+#
+#   shell   [-i|--image PATH] [-p|--partition N]
+#             Start an interactive bash shell with a partition mounted
+#             at /mnt/part inside the container.
 #
 # GLOBAL OPTIONS
 #   -i|--image PATH        Disk image file (default: ./usb.img)
@@ -316,47 +316,113 @@ _progress_monitor() {
     done
 }
 
+# _fmt_bytes — format a byte count as a human-readable string.
+# Args: $1 = bytes (integer or "?")
+# Returns: 0; writes formatted string to stdout
+_fmt_bytes() {
+    local bytes="${1}"
+    [[ "${bytes}" == "?" ]] && echo "?" && return
+    awk -v b="${bytes}" 'BEGIN {
+        split("B KB MB GB TB", s)
+        i = 1
+        while (b >= 1024 && i < 5) { b /= 1024; i++ }
+        printf "%.1f %s\n", b, s[i]
+    }'
+}
+
 # ---------------------------------------------------------------------------
-# Subcommand: serve
+# Subcommand: archive
 # ---------------------------------------------------------------------------
 
-# do_serve — start a read-only HTTP directory server over the mounted partition.
+# Create a compressed archive of a partition path on the host.
 # Args:
-#   [--port PORT]  host port to listen on (default: 8080)
+#   [-p|--partition N]  override auto-detected partition number
+#   <src-path>          absolute path within the partition
+#   <dest>              host output path; extension determines compression
 # Returns:
-#   Runs until interrupted; exit code reflects container exit code.
-do_serve() {
-    local port=8080
+#   0 on success; non-zero on bad arguments, Docker error, or missing path
+do_archive() {
+    local src="" dest=""
     while [[ $# -gt 0 ]]; do
         case "${1}" in
-            --port)
-                [[ -n "${2:-}" ]] || die "--port requires a number"
-                port="${2}"; shift ;;
-            -*) die "Unknown serve option: ${1}" ;;
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown archive option: ${1}" ;;
+            *)
+                if [[ -z "${src}" ]]; then
+                    src="${1}"
+                elif [[ -z "${dest}" ]]; then
+                    dest="${1}"
+                else
+                    die "Unexpected argument: ${1}"
+                fi ;;
         esac
         shift
     done
 
-    if ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
-        die "--port must be a number between 1 and 65535"
-    fi
+    [[ -n "${src}" ]]  || die "archive requires <src-path>"
+    [[ -n "${dest}" ]] || die "archive requires <dest>"
+    [[ "${src}" == /* ]] || die "<src-path> must be absolute (start with /)"
+
+    local out_name
+    out_name="$(basename "${dest}")"
+
+    # Validate extension locally for immediate feedback before Docker spin-up
+    case "${out_name}" in
+        *.tar.gz|*.tgz|*.tar.bz2|*.tbz2|*.tar.xz|*.txz|*.tar) ;;
+        *) die "unsupported archive format: ${out_name}
+       Supported extensions: .tar.gz .tgz .tar.bz2 .tbz2 .tar.xz .txz .tar" ;;
+    esac
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+    set_tty_flags
+
+    # Resolve host-side output directory; create if needed
+    local out_dir
+    local dest_parent
+    dest_parent="$(dirname "${dest}")"
+    mkdir -p "${dest_parent}"
+    out_dir="$(cd "${dest_parent}" && pwd)"
+
+    run_container \
+        -v "${out_dir}:/out" \
+        "${TTY_FLAGS[@]}" \
+        "${IMAGE_REF}" archive "${src}" "${out_name}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: browse
+# ---------------------------------------------------------------------------
+
+# Launch Midnight Commander at the partition root for visual navigation.
+# Args:
+#   [-p|--partition N]  override auto-detected partition number
+# Returns:
+#   Exit code from mc; container must be attached to a TTY.
+do_browse() {
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown browse option: ${1}" ;;
+            *) die "Unexpected argument: ${1}" ;;
+        esac
+        shift
+    done
 
     check_docker
     check_image_file
     ensure_image
     resolve_partition
 
-    log "Serving partition ${PARTITION} at http://localhost:${port}/"
-    log "Press Ctrl-C to stop."
-
-    # Open the browser on macOS after a short delay to let the server start.
-    if command -v open >/dev/null 2>&1; then
-        ( sleep 1 && open "http://localhost:${port}/" ) &
-    fi
-
     run_container \
-        -p "${port}:8080" \
-        "${IMAGE_REF}" serve
+        -i -t \
+        "${IMAGE_REF}" browse
 }
 
 # ---------------------------------------------------------------------------
@@ -527,88 +593,44 @@ do_capture() {
     log "  Physical size: ${physical}"
 }
 
-# _fmt_bytes — format a byte count as a human-readable string.
-# Args: $1 = bytes (integer or "?")
-# Returns: 0; writes formatted string to stdout
-_fmt_bytes() {
-    local bytes="${1}"
-    [[ "${bytes}" == "?" ]] && echo "?" && return
-    awk -v b="${bytes}" 'BEGIN {
-        split("B KB MB GB TB", s)
-        i = 1
-        while (b >= 1024 && i < 5) { b /= 1024; i++ }
-        printf "%.1f %s\n", b, s[i]
-    }'
-}
-
 # ---------------------------------------------------------------------------
-# Subcommand: info
+# Subcommand: clean
 # ---------------------------------------------------------------------------
 
-do_info() {
-    local json_mode=""
-    while [[ $# -gt 0 ]]; do
-        case "${1}" in
-            --json) json_mode="--json" ;;
-            *) die "Unknown info option: ${1}" ;;
-        esac
-        shift
-    done
-
-    check_docker
-    check_image_file
-    ensure_image
-    set_tty_flags
-
-    run_container \
-        "${TTY_FLAGS[@]}" \
-        "${IMAGE_REF}" info ${json_mode}
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: shell
-# ---------------------------------------------------------------------------
-
-do_shell() {
-    check_docker
-    check_image_file
-    ensure_image
-    resolve_partition
-
-    run_container \
-        -i -t \
-        "${IMAGE_REF}" shell
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: browse
-# ---------------------------------------------------------------------------
-
-# Launch Midnight Commander at the partition root for visual navigation.
+# Remove the captured disk image file after confirming with the user.
 # Args:
-#   [-p|--partition N]  override auto-detected partition number
+#   [-y|--yes]  skip confirmation prompt (for scripting)
 # Returns:
-#   Exit code from mc; container must be attached to a TTY.
-do_browse() {
+#   0 on success or aborted; 4 if the file does not exist
+do_clean() {
+    local yes=false
     while [[ $# -gt 0 ]]; do
         case "${1}" in
-            -p|--partition)
-                [[ -n "${2:-}" ]] || die "--partition requires a number"
-                PARTITION="${2}"; shift ;;
-            -*) die "Unknown browse option: ${1}" ;;
+            -y|--yes) yes=true ;;
+            -*) die "Unknown clean option: ${1}" ;;
             *) die "Unexpected argument: ${1}" ;;
         esac
         shift
     done
 
-    check_docker
-    check_image_file
-    ensure_image
-    resolve_partition
+    if [[ ! -f "${IMAGE_FILE}" ]]; then
+        err "Image file not found: ${IMAGE_FILE}"
+        exit 4
+    fi
 
-    run_container \
-        -i -t \
-        "${IMAGE_REF}" browse
+    local size
+    size=$(du -sh "${IMAGE_FILE}" | awk '{print $1}')
+
+    if [[ "${yes}" == false ]]; then
+        printf "usb-explore: Remove %s (%s)? [y/N] " \
+            "${IMAGE_FILE}" "${size}" >&2
+        local answer="n"
+        read -r answer || answer="n"
+        [[ "${answer}" =~ ^[Yy]$ ]] || { log "Aborted."; exit 0; }
+    fi
+
+    rm -- "${IMAGE_FILE}"
+    log "Removed ${IMAGE_FILE} (${size})"
 }
 
 # ---------------------------------------------------------------------------
@@ -656,115 +678,6 @@ do_copy() {
         -v "${out_dir}:/out" \
         "${TTY_FLAGS[@]}" \
         "${IMAGE_REF}" copy "${src}" "${out_name}"
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: archive
-# ---------------------------------------------------------------------------
-
-# Create a compressed archive of a partition path on the host.
-# Args:
-#   [-p|--partition N]  override auto-detected partition number
-#   <src-path>          absolute path within the partition
-#   <dest>              host output path; extension determines compression
-# Returns:
-#   0 on success; non-zero on bad arguments, Docker error, or missing path
-do_archive() {
-    local src="" dest=""
-    while [[ $# -gt 0 ]]; do
-        case "${1}" in
-            -p|--partition)
-                [[ -n "${2:-}" ]] || die "--partition requires a number"
-                PARTITION="${2}"; shift ;;
-            -*) die "Unknown archive option: ${1}" ;;
-            *)
-                if [[ -z "${src}" ]]; then
-                    src="${1}"
-                elif [[ -z "${dest}" ]]; then
-                    dest="${1}"
-                else
-                    die "Unexpected argument: ${1}"
-                fi ;;
-        esac
-        shift
-    done
-
-    [[ -n "${src}" ]]  || die "archive requires <src-path>"
-    [[ -n "${dest}" ]] || die "archive requires <dest>"
-    [[ "${src}" == /* ]] || die "<src-path> must be absolute (start with /)"
-
-    local out_name
-    out_name="$(basename "${dest}")"
-
-    # Validate extension locally for immediate feedback before Docker spin-up
-    case "${out_name}" in
-        *.tar.gz|*.tgz|*.tar.bz2|*.tbz2|*.tar.xz|*.txz|*.tar) ;;
-        *) die "unsupported archive format: ${out_name}
-       Supported extensions: .tar.gz .tgz .tar.bz2 .tbz2 .tar.xz .txz .tar" ;;
-    esac
-
-    check_docker
-    check_image_file
-    ensure_image
-    resolve_partition
-    set_tty_flags
-
-    # Resolve host-side output directory; create if needed
-    local out_dir
-    local dest_parent
-    dest_parent="$(dirname "${dest}")"
-    mkdir -p "${dest_parent}"
-    out_dir="$(cd "${dest_parent}" && pwd)"
-
-    run_container \
-        -v "${out_dir}:/out" \
-        "${TTY_FLAGS[@]}" \
-        "${IMAGE_REF}" archive "${src}" "${out_name}"
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: run
-# ---------------------------------------------------------------------------
-
-do_run() {
-    # Accept -p/--partition here so 'usb-explore run -p N -- cmd' works
-    # alongside the global form 'usb-explore -p N run -- cmd'.
-    # -- ends option parsing; anything after it is the command to exec.
-    while [[ $# -gt 0 && "${1}" != "--" ]]; do
-        case "${1}" in
-            -p|--partition)
-                [[ -n "${2:-}" ]] || die "--partition requires a number"
-                PARTITION="${2}"; shift ;;
-            -*) die "Unknown run option: ${1}
-       Pass -p before the subcommand:  usb-explore -p N run -- <cmd>
-       or between subcommand and --:   usb-explore run -p N -- <cmd>" ;;
-            *) break ;;
-        esac
-        shift
-    done
-    [[ "${1:-}" == "--" ]] && shift
-
-    [[ $# -gt 0 ]] || die "run requires a command after [--]"
-
-    check_docker
-    check_image_file
-    ensure_image
-    resolve_partition
-    set_tty_flags
-
-    # Rewrite leading-/ arguments to /mnt/part<path>
-    local rewritten=()
-    for arg in "$@"; do
-        if [[ "${arg}" == /* ]]; then
-            rewritten+=("/mnt/part${arg}")
-        else
-            rewritten+=("${arg}")
-        fi
-    done
-
-    run_container \
-        "${TTY_FLAGS[@]}" \
-        "${IMAGE_REF}" run "${rewritten[@]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -897,43 +810,130 @@ do_hash() {
 }
 
 # ---------------------------------------------------------------------------
-# Subcommand: clean
+# Subcommand: info
 # ---------------------------------------------------------------------------
 
-# Remove the captured disk image file after confirming with the user.
-# Args:
-#   [-y|--yes]  skip confirmation prompt (for scripting)
-# Returns:
-#   0 on success or aborted; 4 if the file does not exist
-do_clean() {
-    local yes=false
+do_info() {
+    local json_mode=""
     while [[ $# -gt 0 ]]; do
         case "${1}" in
-            -y|--yes) yes=true ;;
-            -*) die "Unknown clean option: ${1}" ;;
-            *) die "Unexpected argument: ${1}" ;;
+            --json) json_mode="--json" ;;
+            *) die "Unknown info option: ${1}" ;;
         esac
         shift
     done
 
-    if [[ ! -f "${IMAGE_FILE}" ]]; then
-        err "Image file not found: ${IMAGE_FILE}"
-        exit 4
+    check_docker
+    check_image_file
+    ensure_image
+    set_tty_flags
+
+    run_container \
+        "${TTY_FLAGS[@]}" \
+        "${IMAGE_REF}" info ${json_mode}
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: run
+# ---------------------------------------------------------------------------
+
+do_run() {
+    # Accept -p/--partition here so 'usb-explore run -p N -- cmd' works
+    # alongside the global form 'usb-explore -p N run -- cmd'.
+    # -- ends option parsing; anything after it is the command to exec.
+    while [[ $# -gt 0 && "${1}" != "--" ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            -*) die "Unknown run option: ${1}
+       Pass -p before the subcommand:  usb-explore -p N run -- <cmd>
+       or between subcommand and --:   usb-explore run -p N -- <cmd>" ;;
+            *) break ;;
+        esac
+        shift
+    done
+    [[ "${1:-}" == "--" ]] && shift
+
+    [[ $# -gt 0 ]] || die "run requires a command after [--]"
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+    set_tty_flags
+
+    # Rewrite leading-/ arguments to /mnt/part<path>
+    local rewritten=()
+    for arg in "$@"; do
+        if [[ "${arg}" == /* ]]; then
+            rewritten+=("/mnt/part${arg}")
+        else
+            rewritten+=("${arg}")
+        fi
+    done
+
+    run_container \
+        "${TTY_FLAGS[@]}" \
+        "${IMAGE_REF}" run "${rewritten[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: serve
+# ---------------------------------------------------------------------------
+
+# do_serve — start a read-only HTTP directory server over the mounted partition.
+# Args:
+#   [--port PORT]  host port to listen on (default: 8080)
+# Returns:
+#   Runs until interrupted; exit code reflects container exit code.
+do_serve() {
+    local port=8080
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --port)
+                [[ -n "${2:-}" ]] || die "--port requires a number"
+                port="${2}"; shift ;;
+            -*) die "Unknown serve option: ${1}" ;;
+        esac
+        shift
+    done
+
+    if ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        die "--port must be a number between 1 and 65535"
     fi
 
-    local size
-    size=$(du -sh "${IMAGE_FILE}" | awk '{print $1}')
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
 
-    if [[ "${yes}" == false ]]; then
-        printf "usb-explore: Remove %s (%s)? [y/N] " \
-            "${IMAGE_FILE}" "${size}" >&2
-        local answer="n"
-        read -r answer || answer="n"
-        [[ "${answer}" =~ ^[Yy]$ ]] || { log "Aborted."; exit 0; }
+    log "Serving partition ${PARTITION} at http://localhost:${port}/"
+    log "Press Ctrl-C to stop."
+
+    # Open the browser on macOS after a short delay to let the server start.
+    if command -v open >/dev/null 2>&1; then
+        ( sleep 1 && open "http://localhost:${port}/" ) &
     fi
 
-    rm -- "${IMAGE_FILE}"
-    log "Removed ${IMAGE_FILE} (${size})"
+    run_container \
+        -p "${port}:8080" \
+        "${IMAGE_REF}" serve
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: shell
+# ---------------------------------------------------------------------------
+
+do_shell() {
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    run_container \
+        -i -t \
+        "${IMAGE_REF}" shell
 }
 
 # ---------------------------------------------------------------------------
@@ -970,7 +970,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        build|capture|info|shell|browse|copy|archive|run|diff|serve|find|hash|clean)
+        archive|browse|build|capture|clean|copy|diff|find|hash|info|run|serve|shell)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -983,17 +983,17 @@ done
 [[ -n "${SUBCOMMAND}" ]] || { usage; exit 2; }
 
 case "${SUBCOMMAND}" in
+    archive) do_archive "$@" ;;
+    browse)  do_browse  "$@" ;;
     build)   do_build   "$@" ;;
     capture) do_capture "$@" ;;
-    info)    do_info    "$@" ;;
-    shell)   do_shell   "$@" ;;
-    browse)  do_browse  "$@" ;;
+    clean)   do_clean   "$@" ;;
     copy)    do_copy    "$@" ;;
-    archive) do_archive "$@" ;;
-    run)     do_run     "$@" ;;
     diff)    do_diff    "$@" ;;
-    serve)   do_serve   "$@" ;;
     find)    do_find    "$@" ;;
     hash)    do_hash    "$@" ;;
-    clean)   do_clean   "$@" ;;
+    info)    do_info    "$@" ;;
+    run)     do_run     "$@" ;;
+    serve)   do_serve   "$@" ;;
+    shell)   do_shell   "$@" ;;
 esac

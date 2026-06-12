@@ -38,19 +38,19 @@ LABEL org.opencontainers.image.authors="${AUTHORS}"
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      util-linux \
-      fdisk \
-      e2fsprogs \
-      xfsprogs \
-      rsync \
+      bzip2 \
       diffutils \
+      e2fsprogs \
+      fdisk \
       file \
       jq \
-      python3 \
-      bzip2 \
-      xz-utils \
       mc \
       ncdu \
+      python3 \
+      rsync \
+      util-linux \
+      xfsprogs \
+      xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/container/ /usr/local/lib/usb-explore/

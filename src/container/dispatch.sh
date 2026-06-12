@@ -162,79 +162,6 @@ mount_partition() {
 }
 
 # ---------------------------------------------------------------------------
-# Subcommand: info
-# ---------------------------------------------------------------------------
-
-do_info() {
-    exec /usr/local/lib/usb-explore/info.sh "$@"
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: shell
-# ---------------------------------------------------------------------------
-
-do_shell() {
-    mount_partition
-    export PS1="(usb-explore p${USB_PARTITION}) \w \$ "
-    cd /mnt/part
-    exec bash --norc --noprofile
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: copy
-# ---------------------------------------------------------------------------
-
-do_copy() {
-    local src="${1}" dst_name="${2}"
-    mount_partition
-
-    local src_abs="/mnt/part/${src#/}"
-    if [[ ! -e "${src_abs}" ]]; then
-        echo "error: path not found in image: ${src}" >&2
-        exit 1
-    fi
-
-    # Trailing slash on source dir copies its CONTENTS into dest, avoiding
-    # the rsync "copy-into" behaviour that would create dest/basename/.
-    if [[ -d "${src_abs}" ]]; then
-        mkdir -p "/out/${dst_name}"
-        rsync -a --no-owner --no-group "${src_abs}/" "/out/${dst_name}/"
-    else
-        rsync -a --no-owner --no-group "${src_abs}" "/out/${dst_name}"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: run
-# ---------------------------------------------------------------------------
-
-# Args: command and arguments, with leading / paths already rewritten to
-# /mnt/part/<path> by the host wrapper before being passed in.
-# CWD is set to /mnt/part so that bare commands like 'ls' or 'find .'
-# operate on the partition root rather than the container root.
-do_run() {
-    mount_partition
-    cd /mnt/part
-    exec "$@"
-}
-
-# ---------------------------------------------------------------------------
-# Subcommand: browse
-# ---------------------------------------------------------------------------
-
-# Launch Midnight Commander (mc) rooted at the mounted partition.
-# Requires a TTY; the host wrapper always passes -i -t.
-# Args:
-#   None
-# Returns:
-#   Exit code from mc; runs until the user quits the file manager.
-do_browse() {
-    mount_partition
-    cd /mnt/part
-    exec mc /mnt/part
-}
-
-# ---------------------------------------------------------------------------
 # Subcommand: archive
 # ---------------------------------------------------------------------------
 
@@ -281,14 +208,43 @@ do_archive() {
 }
 
 # ---------------------------------------------------------------------------
-# Subcommand: serve
+# Subcommand: browse
 # ---------------------------------------------------------------------------
 
-# Serve the mounted partition as a read-only HTTP directory index on port 8080.
-# The host wrapper maps a host port to this container port via -p.
-do_serve() {
+# Launch Midnight Commander (mc) rooted at the mounted partition.
+# Requires a TTY; the host wrapper always passes -i -t.
+# Args:
+#   None
+# Returns:
+#   Exit code from mc; runs until the user quits the file manager.
+do_browse() {
     mount_partition
-    exec python3 -m http.server 8080 --directory /mnt/part
+    cd /mnt/part
+    exec mc /mnt/part
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: copy
+# ---------------------------------------------------------------------------
+
+do_copy() {
+    local src="${1}" dst_name="${2}"
+    mount_partition
+
+    local src_abs="/mnt/part/${src#/}"
+    if [[ ! -e "${src_abs}" ]]; then
+        echo "error: path not found in image: ${src}" >&2
+        exit 1
+    fi
+
+    # Trailing slash on source dir copies its CONTENTS into dest, avoiding
+    # the rsync "copy-into" behaviour that would create dest/basename/.
+    if [[ -d "${src_abs}" ]]; then
+        mkdir -p "/out/${dst_name}"
+        rsync -a --no-owner --no-group "${src_abs}/" "/out/${dst_name}/"
+    else
+        rsync -a --no-owner --no-group "${src_abs}" "/out/${dst_name}"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -390,20 +346,64 @@ do_hash() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: info
+# ---------------------------------------------------------------------------
+
+do_info() {
+    exec /usr/local/lib/usb-explore/info.sh "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: run
+# ---------------------------------------------------------------------------
+
+# Args: command and arguments, with leading / paths already rewritten to
+# /mnt/part/<path> by the host wrapper before being passed in.
+# CWD is set to /mnt/part so that bare commands like 'ls' or 'find .'
+# operate on the partition root rather than the container root.
+do_run() {
+    mount_partition
+    cd /mnt/part
+    exec "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: serve
+# ---------------------------------------------------------------------------
+
+# Serve the mounted partition as a read-only HTTP directory index on port 8080.
+# The host wrapper maps a host port to this container port via -p.
+do_serve() {
+    mount_partition
+    exec python3 -m http.server 8080 --directory /mnt/part
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: shell
+# ---------------------------------------------------------------------------
+
+do_shell() {
+    mount_partition
+    export PS1="(usb-explore p${USB_PARTITION}) \w \$ "
+    cd /mnt/part
+    exec bash --norc --noprofile
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
 case "${SUBCOMMAND}" in
-    info)    do_info    "$@" ;;
-    shell)   do_shell   "$@" ;;
+    archive) do_archive "$@" ;;
     browse)  do_browse  "$@" ;;
     copy)    do_copy    "$@" ;;
-    archive) do_archive "$@" ;;
-    run)     do_run     "$@" ;;
     diff)    do_diff    "$@" ;;
-    serve)   do_serve   "$@" ;;
     find)    do_find    "$@" ;;
     hash)    do_hash    "$@" ;;
+    info)    do_info    "$@" ;;
+    run)     do_run     "$@" ;;
+    serve)   do_serve   "$@" ;;
+    shell)   do_shell   "$@" ;;
     *)
         echo "error: unknown subcommand '${SUBCOMMAND}'" >&2
         exit 2 ;;

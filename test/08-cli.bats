@@ -125,16 +125,25 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 # mean the subcommand was not recognised.
 # ---------------------------------------------------------------------------
 
-@test "cli: 'info' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" info
+@test "cli: 'archive' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" archive /etc ./etc.tar.gz
     [ "${status}" -ne 2 ]
 }
 
-@test "cli: 'shell' subcommand is routed (not a usage error)" {
-    # Allow any exit code: Docker may be unavailable (3), image missing (4),
-    # or a downstream tool may be absent (127). None of these is exit 2
-    # (usage error = unknown subcommand).
-    run bash "${SCRIPT}" shell
+@test "cli: 'archive' subcommand reports missing arguments" {
+    run bash "${SCRIPT}" archive
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: 'archive' rejects unsupported extension" {
+    run bash "${SCRIPT}" archive /etc ./etc.zip
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"unsupported"* ]]
+}
+
+@test "cli: 'browse' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" browse
     [ "${status}" -ne 2 ]
 }
 
@@ -144,13 +153,34 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"requires"* || "${status}" -eq 2 ]]
 }
 
-@test "cli: 'run' subcommand reports missing command" {
-    run bash "${SCRIPT}" run
+@test "cli: 'diff' subcommand reports missing arguments" {
+    run bash "${SCRIPT}" diff
     [ "${status}" -ne 0 ]
 }
 
-@test "cli: 'diff' subcommand reports missing arguments" {
-    run bash "${SCRIPT}" diff
+@test "cli: 'find' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" find "*.log"
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'find' subcommand reports missing pattern" {
+    run bash "${SCRIPT}" find
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: 'find' --grep flag is accepted" {
+    run bash "${SCRIPT}" find --grep "ERROR"
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'info' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'run' subcommand reports missing command" {
+    run bash "${SCRIPT}" run
     [ "${status}" -ne 0 ]
 }
 
@@ -170,42 +200,12 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"65535"* ]]
 }
 
-@test "cli: 'browse' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" browse
+@test "cli: 'shell' subcommand is routed (not a usage error)" {
+    # Allow any exit code: Docker may be unavailable (3), image missing (4),
+    # or a downstream tool may be absent (127). None of these is exit 2
+    # (usage error = unknown subcommand).
+    run bash "${SCRIPT}" shell
     [ "${status}" -ne 2 ]
-}
-
-@test "cli: 'find' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" find "*.log"
-    [ "${status}" -ne 2 ]
-}
-
-@test "cli: 'find' subcommand reports missing pattern" {
-    run bash "${SCRIPT}" find
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"requires"* ]]
-}
-
-@test "cli: 'find' --grep flag is accepted" {
-    run bash "${SCRIPT}" find --grep "ERROR"
-    [ "${status}" -ne 2 ]
-}
-
-@test "cli: 'archive' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" archive /etc ./etc.tar.gz
-    [ "${status}" -ne 2 ]
-}
-
-@test "cli: 'archive' subcommand reports missing arguments" {
-    run bash "${SCRIPT}" archive
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"requires"* ]]
-}
-
-@test "cli: 'archive' rejects unsupported extension" {
-    run bash "${SCRIPT}" archive /etc ./etc.zip
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"unsupported"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -220,27 +220,6 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 @test "cli: capture --no-sparse removes conv=sparse from dry-run" {
     run bash "${SCRIPT}" capture /dev/disk0 --no-sparse --dry-run
     [[ "${output}" != *"conv=sparse"* ]]
-}
-
-# ---------------------------------------------------------------------------
-# hash
-# ---------------------------------------------------------------------------
-
-@test "cli: 'hash' subcommand is routed (not a usage error)" {
-    run bash "${SCRIPT}" hash /etc/hostname
-    [ "${status}" -ne 2 ]
-}
-
-@test "cli: 'hash' subcommand reports missing path argument" {
-    run bash "${SCRIPT}" hash
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"requires"* ]]
-}
-
-@test "cli: 'hash' rejects a non-absolute path" {
-    run bash "${SCRIPT}" hash etc/hostname
-    [ "${status}" -ne 0 ]
-    [[ "${output}" == *"absolute"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -284,4 +263,25 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [ "${status}" -eq 0 ]
     [[ -f "${tmp}" ]]
     rm -f "${tmp}"
+}
+
+# ---------------------------------------------------------------------------
+# hash
+# ---------------------------------------------------------------------------
+
+@test "cli: 'hash' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" hash /etc/hostname
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'hash' subcommand reports missing path argument" {
+    run bash "${SCRIPT}" hash
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: 'hash' rejects a non-absolute path" {
+    run bash "${SCRIPT}" hash etc/hostname
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"absolute"* ]]
 }
