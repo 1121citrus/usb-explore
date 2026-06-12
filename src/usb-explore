@@ -63,6 +63,11 @@
 #             Exit 1 when --grep finds no matches (standard grep
 #             behaviour); exit 0 when a name search finds nothing.
 #
+#   clean   [-i|--image PATH] [-y|--yes]
+#             Remove the captured disk image file. Prompts for
+#             confirmation unless -y/--yes is given. Does not require
+#             Docker.
+#
 # GLOBAL OPTIONS
 #   -i|--image PATH        Disk image file (default: ./usb.img)
 #   -p|--partition N       Partition number to mount (default: auto)
@@ -850,6 +855,46 @@ do_find() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: clean
+# ---------------------------------------------------------------------------
+
+# Remove the captured disk image file after confirming with the user.
+# Args:
+#   [-y|--yes]  skip confirmation prompt (for scripting)
+# Returns:
+#   0 on success or aborted; 4 if the file does not exist
+do_clean() {
+    local yes=false
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -y|--yes) yes=true ;;
+            -*) die "Unknown clean option: ${1}" ;;
+            *) die "Unexpected argument: ${1}" ;;
+        esac
+        shift
+    done
+
+    if [[ ! -f "${IMAGE_FILE}" ]]; then
+        err "Image file not found: ${IMAGE_FILE}"
+        exit 4
+    fi
+
+    local size
+    size=$(du -sh "${IMAGE_FILE}" | awk '{print $1}')
+
+    if [[ "${yes}" == false ]]; then
+        printf "usb-explore: Remove %s (%s)? [y/N] " \
+            "${IMAGE_FILE}" "${size}" >&2
+        local answer="n"
+        read -r answer || answer="n"
+        [[ "${answer}" =~ ^[Yy]$ ]] || { log "Aborted."; exit 0; }
+    fi
+
+    rm -- "${IMAGE_FILE}"
+    log "Removed ${IMAGE_FILE} (${size})"
+}
+
+# ---------------------------------------------------------------------------
 # Argument parsing (global options + subcommand dispatch)
 # ---------------------------------------------------------------------------
 
@@ -883,7 +928,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        build|capture|info|shell|browse|copy|archive|run|diff|serve|find)
+        build|capture|info|shell|browse|copy|archive|run|diff|serve|find|clean)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -907,4 +952,5 @@ case "${SUBCOMMAND}" in
     diff)    do_diff    "$@" ;;
     serve)   do_serve   "$@" ;;
     find)    do_find    "$@" ;;
+    clean)   do_clean   "$@" ;;
 esac

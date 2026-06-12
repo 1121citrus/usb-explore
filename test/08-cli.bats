@@ -39,6 +39,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"archive"* ]]
     [[ "${output}" == *"browse"*  ]]
     [[ "${output}" == *"find"*    ]]
+    [[ "${output}" == *"clean"*   ]]
 }
 
 @test "cli: -h is an alias for --help" {
@@ -218,4 +219,47 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 @test "cli: capture --no-sparse removes conv=sparse from dry-run" {
     run bash "${SCRIPT}" capture /dev/disk0 --no-sparse --dry-run
     [[ "${output}" != *"conv=sparse"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# clean
+# ---------------------------------------------------------------------------
+
+@test "cli: 'clean' --yes removes the image file" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean --yes
+    [ "${status}" -eq 0 ]
+    [[ ! -f "${tmp}" ]]
+}
+
+@test "cli: 'clean' -y short flag removes the image file" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean -y
+    [ "${status}" -eq 0 ]
+    [[ ! -f "${tmp}" ]]
+}
+
+@test "cli: 'clean' exits 4 when image file is missing" {
+    run bash "${SCRIPT}" --image /nonexistent/no.img clean --yes
+    [ "${status}" -eq 4 ]
+}
+
+@test "cli: 'clean' aborts and exits 0 when user inputs n" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash -c "echo n | bash '${SCRIPT}' --image '${tmp}' clean"
+    [ "${status}" -eq 0 ]
+    [[ -f "${tmp}" ]]
+    rm -f "${tmp}"
+}
+
+@test "cli: 'clean' aborts and exits 0 on empty input (no TTY)" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash -c "echo '' | bash '${SCRIPT}' --image '${tmp}' clean"
+    [ "${status}" -eq 0 ]
+    [[ -f "${tmp}" ]]
+    rm -f "${tmp}"
 }
