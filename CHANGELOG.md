@@ -39,6 +39,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `xz-utils` (required by `archive`), `mc` and `ncdu` (required by
   `browse`).
 
+### Security
+
+- Added `apt-get upgrade -y` to the Dockerfile `RUN` layer to pull in
+  base-image security fixes at build time. Resolves CVE-2026-45447
+  (openssl: heap use-after-free in `PKCS7_verify`, HIGH) by upgrading
+  `libssl3t64` from `3.0.13-0ubuntu3.9` to `3.0.13-0ubuntu3.11`.
+
 ### Changed
 
 - All subcommand declarations (SYNOPSIS, function definitions, routing
