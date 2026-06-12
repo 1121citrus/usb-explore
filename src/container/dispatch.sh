@@ -310,6 +310,56 @@ do_diff() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: find
+# ---------------------------------------------------------------------------
+
+# Search the mounted partition by filename glob, file contents, or both.
+# Strips the /mnt/part prefix from all output so paths are usable directly
+# with other subcommands (copy, archive, diff).
+# Args:
+#   [NAME-GLOB]     glob matched against file basenames
+#   [--grep PAT]    pattern searched in file contents (grep -E syntax)
+# Returns:
+#   0 on success; 1 when --grep finds no matches (standard grep exit)
+do_find() {
+    local name_pattern="" grep_pattern=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --grep)
+                [[ -n "${2:-}" ]] \
+                    || { echo "error: --grep requires a pattern" >&2; exit 1; }
+                grep_pattern="${2}"; shift ;;
+            -*)
+                echo "error: unknown find option: ${1}" >&2; exit 1 ;;
+            *)
+                if [[ -z "${name_pattern}" ]]; then
+                    name_pattern="${1}"
+                else
+                    echo "error: unexpected argument: ${1}" >&2; exit 1
+                fi ;;
+        esac
+        shift
+    done
+
+    [[ -n "${name_pattern}" || -n "${grep_pattern}" ]] \
+        || { echo "error: find requires a NAME-GLOB and/or --grep PATTERN" >&2
+             exit 1; }
+
+    mount_partition
+
+    if [[ -n "${grep_pattern}" ]]; then
+        # Build grep args; --include restricts to filenames when combined
+        local grep_args=(-r -H)
+        [[ -n "${name_pattern}" ]] \
+            && grep_args+=(--include="${name_pattern}")
+        grep_args+=(-- "${grep_pattern}" /mnt/part)
+        grep "${grep_args[@]}" | sed 's|^/mnt/part||'
+    else
+        find /mnt/part -name "${name_pattern}" | sed 's|^/mnt/part||'
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -322,6 +372,7 @@ case "${SUBCOMMAND}" in
     run)     do_run     "$@" ;;
     diff)    do_diff    "$@" ;;
     serve)   do_serve   "$@" ;;
+    find)    do_find    "$@" ;;
     *)
         echo "error: unknown subcommand '${SUBCOMMAND}'" >&2
         exit 2 ;;

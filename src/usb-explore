@@ -54,6 +54,15 @@
 #             http://localhost:PORT (default 8080), browseable in any
 #             web browser. Press Ctrl-C to stop.
 #
+#   find    [-i|--image PATH] [-p|--partition N]
+#             [--grep PATTERN] [NAME-GLOB]
+#             Search the partition. NAME-GLOB finds files by name
+#             (e.g. "*.log"). --grep PATTERN searches file contents.
+#             Both flags may be combined. Output paths are relative to
+#             the partition root and usable directly with copy/archive.
+#             Exit 1 when --grep finds no matches (standard grep
+#             behaviour); exit 0 when a name search finds nothing.
+#
 # GLOBAL OPTIONS
 #   -i|--image PATH        Disk image file (default: ./usb.img)
 #   -p|--partition N       Partition number to mount (default: auto)
@@ -795,6 +804,52 @@ do_diff() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: find
+# ---------------------------------------------------------------------------
+
+# Search the partition by filename glob, file contents, or both.
+# Args:
+#   [-p|--partition N]  override auto-detected partition number
+#   [NAME-GLOB]         glob matched against file basenames (e.g. "*.log")
+#   [--grep PATTERN]    regex/string searched in file contents
+# Returns:
+#   0 on success; 1 when --grep finds no matches (grep standard exit)
+do_find() {
+    local name_pattern="" grep_pattern=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            --grep)
+                [[ -n "${2:-}" ]] || die "--grep requires a pattern"
+                grep_pattern="${2}"; shift ;;
+            -*) die "Unknown find option: ${1}" ;;
+            *)
+                [[ -z "${name_pattern}" ]] \
+                    || die "Unexpected argument: ${1}"
+                name_pattern="${1}" ;;
+        esac
+        shift
+    done
+
+    [[ -n "${name_pattern}" || -n "${grep_pattern}" ]] \
+        || die "find requires a NAME-GLOB and/or --grep PATTERN"
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    local find_args=()
+    [[ -n "${name_pattern}" ]] && find_args+=("${name_pattern}")
+    [[ -n "${grep_pattern}" ]] && find_args+=("--grep" "${grep_pattern}")
+
+    run_container \
+        "${IMAGE_REF}" find "${find_args[@]}"
+}
+
+# ---------------------------------------------------------------------------
 # Argument parsing (global options + subcommand dispatch)
 # ---------------------------------------------------------------------------
 
@@ -828,7 +883,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        build|capture|info|shell|browse|copy|archive|run|diff|serve)
+        build|capture|info|shell|browse|copy|archive|run|diff|serve|find)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -851,4 +906,5 @@ case "${SUBCOMMAND}" in
     run)     do_run     "$@" ;;
     diff)    do_diff    "$@" ;;
     serve)   do_serve   "$@" ;;
+    find)    do_find    "$@" ;;
 esac

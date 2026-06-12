@@ -348,3 +348,56 @@ run_single() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"mbr-test"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# find
+# ---------------------------------------------------------------------------
+
+@test "subcommand find: finds files by name glob" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" find "hostname"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/etc/hostname"* ]]
+}
+
+@test "subcommand find: --grep finds file contents" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" find --grep "usb-explore-test"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/etc/hostname"* ]]
+    [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+@test "subcommand find: combines name glob and --grep" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" find "hostname" --grep "usb-explore-test"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+@test "subcommand find: --grep exits 1 when nothing matches" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" find --grep "ZZZNOMATCHZZZ"
+    [ "${status}" -eq 1 ]
+}
+
+@test "subcommand find: name search exits 0 when nothing matches" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" find "ZZZNOMATCH.xyz"
+    [ "${status}" -eq 0 ]
+}

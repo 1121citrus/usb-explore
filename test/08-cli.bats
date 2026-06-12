@@ -38,6 +38,7 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
     [[ "${output}" == *"serve"*   ]]
     [[ "${output}" == *"archive"* ]]
     [[ "${output}" == *"browse"*  ]]
+    [[ "${output}" == *"find"*    ]]
 }
 
 @test "cli: -h is an alias for --help" {
@@ -169,6 +170,22 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 
 @test "cli: 'browse' subcommand is routed (not a usage error)" {
     run bash "${SCRIPT}" browse
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'find' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" find "*.log"
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'find' subcommand reports missing pattern" {
+    run bash "${SCRIPT}" find
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: 'find' --grep flag is accepted" {
+    run bash "${SCRIPT}" find --grep "ERROR"
     [ "${status}" -ne 2 ]
 }
 
