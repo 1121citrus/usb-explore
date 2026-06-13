@@ -9,15 +9,6 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- `shell` and `serve` subcommands now accept `-p|--partition N` as a
-  per-subcommand flag. Previously both functions had no argument parser,
-  so a partition specified after the subcommand name (e.g.
-  `usb-explore shell -p 4`) was silently ignored and `select-partition`
-  fell through to the multi-partition error even when the user had
-  explicitly selected a partition.
-
 ---
 
 ## [1.0.0] — 2026-06-12
@@ -71,6 +62,47 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   warnings (exit 127) in the BATS test suite when `jq` is absent
   from the host (e.g. the Alpine-based `bats/bats:1.13.0` runner).
 
+### Fixed
+
+- `shell` and `serve` subcommands now accept `-p|--partition N` as a
+  per-subcommand flag. Previously both functions had no argument parser,
+  so a partition specified after the subcommand name (e.g.
+  `usb-explore shell -p 4`) was silently ignored and `select-partition`
+  fell through to the multi-partition error even when the user had
+  explicitly selected a partition.
+- Interactive subcommands (`shell`, `browse`, `serve`) now return exit 0
+  when the user presses Ctrl-C. Docker exits 130 on SIGINT; the previous
+  code propagated that exit code, triggering Docker Desktop's error prompt
+  even though the user intentionally ended the session. The `|| rc=$?`
+  idiom is required because `set -e` exits the script before a plain
+  `rc=$?` assignment is reached.
+- `shell` sessions no longer leave a spurious `exit` line in the host
+  terminal when the session ends. Bash's interactive shutdown handler
+  always prints `exit`; the fix disables bash 5.1+ bracketed-paste mode
+  (via `INPUTRC`) so readline's escape sequences do not displace the
+  cursor, then erases the trailing line with `\033[1A\033[2K\r` after
+  `docker run` returns.
+- Docker Desktop's "What's next:" hint block no longer appears after
+  interactive sessions that exit via Ctrl-D. `DOCKER_CLI_HINTS=false` is
+  now set in `run_container` before invoking docker. Without it, the
+  multi-line hint block shifted the cursor past the cleanup target,
+  leaving the spurious `exit` line visible.
+- `run` output no longer includes the container-internal `/mnt/part/`
+  prefix. All path output from `run` is now partition-relative, matching
+  the output of `find` and `hash`, and can be piped directly into `copy`,
+  `archive`, `diff`, and `hash` without manual editing. The host-side
+  subcommands also accept `/mnt/part`-prefixed paths as a compatibility
+  fallback (e.g. paths pasted from a `shell` session).
+- `browse` now resets the terminal state before the container exits.
+  `mc` enables mouse-tracking and alternate-screen modes and does not
+  always disable them — in particular when its Ctrl-O subshell is active.
+  Without an explicit reset, pending mouse-tracking escape sequences were
+  received as text by processes still in the container, producing phantom
+  commands at the host prompt (e.g. `bash: 10: command not found`). The
+  fix emits `\033c` (VT100 Reset to Initial State) after `mc` exits. The
+  `exec` before `mc` was removed so that the dispatch process survives
+  long enough to perform the reset.
+
 ### Tests
 
 - Routing tests in `test/08-cli.bats` now pass `--image /nonexistent.img`
@@ -78,6 +110,22 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   container or host tool. Previously, a `usb.img` in the working
   directory caused them to proceed into `resolve_partition` and
   trigger BW01 advisory warnings.
+- Exit-code normalisation: four tests verify that `shell`, `browse`, and
+  `serve` map docker exit 130 (SIGINT) to exit 0 and propagate other
+  non-zero codes. Tests use a minimal docker stub to avoid requiring a
+  live container.
+- Static-analysis tests cover terminal-cleanup invariants: bracketed-paste
+  disabled in container `do_shell` via `INPUTRC`; cursor-up+clear escape
+  (`\033[1A\033[2K`) present in host `do_shell`; `DOCKER_CLI_HINTS=false`
+  present in `run_container`.
+- Static-analysis tests cover `/mnt/part` stripping: `copy` and `diff`
+  strip the container prefix from path arguments; container `do_run`
+  filters `/mnt/part/` from output via `sed`.
+- Static-analysis tests cover `browse` terminal reset: `printf '\033c'`
+  present and `exec mc` absent in container `do_browse`.
+- `test/08-cli.bats` adds a `DISPATCH` constant pointing at
+  `src/container/dispatch.sh` for container-side static-analysis. Total
+  tests in the file: 53 (up from 42 in the initial 1.0.0 draft).
 
 ### Documentation
 
@@ -90,6 +138,13 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tools** (archive, diff, hash), and **Developer** (build). Commands
   are lexically sorted within each group. Group headings appear in the
   table of contents with short descriptions.
+- `README.md` `shell` section: clarified that Ctrl-C interrupts the
+  current command but keeps the session open; it does not exit the
+  shell.
+- `README.md` `run` section: removed the mention of the container-internal
+  `/mnt/part` prefix. Path arguments and output are now described as
+  partition-relative; output can be piped directly into `copy`, `archive`,
+  `hash`, and `diff`.
 
 ---
 
