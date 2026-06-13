@@ -126,6 +126,7 @@ IMAGE_FILE="${USB_EXPLORE_IMAGE:-./usb.img}"
 PARTITION=""
 DEBUG=false
 CONTAINER_NAME="usb-explore-$$"
+CONTAINER_STARTED=false
 
 # ---------------------------------------------------------------------------
 # Logging helpers
@@ -188,7 +189,8 @@ ensure_image() {
 # ---------------------------------------------------------------------------
 
 _cleanup() {
-    docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    "${CONTAINER_STARTED}" && \
+        docker stop "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 }
 trap '_cleanup' INT TERM EXIT
 
@@ -246,6 +248,7 @@ run_container() {
     # Suppress Docker Desktop's "What's next:" hint block, which otherwise
     # appears after interactive sessions and shifts terminal content down,
     # breaking the cursor cleanup in do_shell.
+    CONTAINER_STARTED=true
     DOCKER_CLI_HINTS=false docker "${docker_args[@]}"
 }
 
@@ -596,6 +599,9 @@ do_clean() {
     local yes=false
     while [[ $# -gt 0 ]]; do
         case "${1}" in
+            -i|--image)
+                [[ -n "${2:-}" ]] || die "--image requires a path"
+                IMAGE_FILE="${2}"; shift ;;
             -y|--yes) yes=true ;;
             -*) die "Unknown clean option: ${1}" ;;
             *) die "Unexpected argument: ${1}" ;;
@@ -619,7 +625,7 @@ do_clean() {
         [[ "${answer}" =~ ^[Yy]$ ]] || { log "Aborted."; exit 0; }
     fi
 
-    rm -- "${IMAGE_FILE}"
+    rm -f -- "${IMAGE_FILE}"
     log "Removed ${IMAGE_FILE} (${size})"
 }
 

@@ -438,3 +438,51 @@ EOF
 @test "browse: dispatch.sh do_browse does not exec mc (allows RIS cleanup to run)" {
     run ! grep -qE '^[[:space:]]*exec mc' "${DISPATCH}"
 }
+
+# ---------------------------------------------------------------------------
+# Static-analysis — cleanup: _cleanup only calls docker stop when a container
+# was actually started
+#
+# Prior to this fix, _cleanup unconditionally ran 'docker stop' on every
+# exit, including argument-parsing failures (die() -> exit 1).  When Docker
+# Desktop is starting or under load, docker stop blocks for several seconds
+# even for non-existent containers, making the script appear to hang after
+# an error.  The fix adds a CONTAINER_STARTED guard variable (false by
+# default, set to true in run_container immediately before docker run) so
+# that _cleanup skips the docker stop entirely when no container was launched.
+# ---------------------------------------------------------------------------
+
+@test "cleanup: CONTAINER_STARTED guards docker stop in _cleanup" {
+    grep -q 'CONTAINER_STARTED' "${SCRIPT}"
+}
+
+@test "cleanup: run_container sets CONTAINER_STARTED=true before docker invocation" {
+    grep -q 'CONTAINER_STARTED=true' "${SCRIPT}"
+}
+
+# ---------------------------------------------------------------------------
+# clean: -i|--image accepted as per-subcommand flag; rm -f skips
+# write-protected prompt
+#
+# 'clean' documents -i|--image in its SYNOPSIS but the argument parser did
+# not handle it, producing "Unknown clean option: -i" and exiting 1.  The
+# fix adds the -i|--image case to do_clean's while loop.
+#
+# The file removal used plain 'rm' which prompts before removing
+# write-protected files (files owned by root with mode 0644 are common when
+# the image was written via sudo dd).  With the user having already confirmed
+# the deletion, the secondary 'rm: remove write-protected file?' prompt is
+# unexpected.  The fix uses 'rm -f' to suppress it.
+# ---------------------------------------------------------------------------
+
+@test "clean: do_clean accepts -i|--image as a per-subcommand flag" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" clean --image "${tmp}" --yes
+    [ "${status}" -eq 0 ]
+    [[ ! -f "${tmp}" ]]
+}
+
+@test "clean: rm uses -f to skip write-protected prompt after confirmation" {
+    grep -q 'rm -f' "${SCRIPT}"
+}
