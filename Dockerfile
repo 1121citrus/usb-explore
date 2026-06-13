@@ -35,17 +35,25 @@ LABEL org.opencontainers.image.authors="${AUTHORS}"
 
 # Version pinning omitted: Trivy/Grype CVE scans the final image, making
 # apt version pins redundant overhead for this developer tool.
-# hadolint ignore=DL3008
+# apt-get upgrade ensures base-image CVE fixes (e.g. libssl) are applied
+# without waiting for a new ubuntu:24.04 digest to be published.
+# hadolint ignore=DL3005,DL3008
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
-      util-linux \
-      fdisk \
-      e2fsprogs \
-      xfsprogs \
-      rsync \
+      bzip2 \
       diffutils \
+      e2fsprogs \
+      fdisk \
       file \
       jq \
+      mc \
+      ncdu \
+      python3 \
+      rsync \
+      util-linux \
+      xfsprogs \
+      xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 COPY src/container/ /usr/local/lib/usb-explore/

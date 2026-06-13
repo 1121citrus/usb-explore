@@ -15,23 +15,13 @@ run_in_image() {
 # Required binaries
 # ---------------------------------------------------------------------------
 
-@test "image: losetup is present" {
-    run run_in_image 'command -v losetup || ls /usr/sbin/losetup'
+@test "image: bash is present" {
+    run run_in_image 'command -v bash'
     [ "${status}" -eq 0 ]
 }
 
 @test "image: blkid is present" {
     run run_in_image 'command -v blkid || ls /usr/sbin/blkid'
-    [ "${status}" -eq 0 ]
-}
-
-@test "image: sfdisk is present" {
-    run run_in_image 'command -v sfdisk || ls /usr/sbin/sfdisk'
-    [ "${status}" -eq 0 ]
-}
-
-@test "image: rsync is present" {
-    run run_in_image 'command -v rsync'
     [ "${status}" -eq 0 ]
 }
 
@@ -45,8 +35,28 @@ run_in_image() {
     [ "${status}" -eq 0 ]
 }
 
-@test "image: bash is present" {
-    run run_in_image 'command -v bash'
+@test "image: losetup is present" {
+    run run_in_image 'command -v losetup || ls /usr/sbin/losetup'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: mc is present" {
+    run run_in_image 'command -v mc'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: ncdu is present" {
+    run run_in_image 'command -v ncdu'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: rsync is present" {
+    run run_in_image 'command -v rsync'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: sfdisk is present" {
+    run run_in_image 'command -v sfdisk || ls /usr/sbin/sfdisk'
     [ "${status}" -eq 0 ]
 }
 

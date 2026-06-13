@@ -162,22 +162,75 @@ mount_partition() {
 }
 
 # ---------------------------------------------------------------------------
-# Subcommand: info
+# Subcommand: archive
 # ---------------------------------------------------------------------------
 
-do_info() {
-    exec /usr/local/lib/usb-explore/info.sh "$@"
+# Create a compressed archive of a partition path and write it to /out/.
+# Args:
+#   $1  src-path — absolute path within the mounted partition
+#   $2  archive-name — output filename; compression from extension
+#         .tar.gz / .tgz  → gzip
+#         .tar.bz2 / .tbz2 → bzip2
+#         .tar.xz / .txz   → xz
+#         .tar              → no compression
+# Returns:
+#   0 on success; 1 on path-not-found or unrecognised extension
+do_archive() {
+    local src="${1}" archive_name="${2}"
+    mount_partition
+
+    local src_abs="/mnt/part/${src#/}"
+    if [[ ! -e "${src_abs}" ]]; then
+        echo "error: path not found in image: ${src}" >&2
+        exit 1
+    fi
+
+    # Infer compression flag from archive name extension
+    local compress=""
+    case "${archive_name}" in
+        *.tar.gz|*.tgz)   compress="-z" ;;
+        *.tar.bz2|*.tbz2) compress="-j" ;;
+        *.tar.xz|*.txz)   compress="-J" ;;
+        *.tar)             compress=""   ;;
+        *)
+            echo "error: unrecognised archive extension: ${archive_name}" >&2
+            echo "       Supported: .tar.gz .tgz .tar.bz2 .tbz2 .tar.xz .txz .tar" >&2
+            exit 1 ;;
+    esac
+
+    # Build tar argument list; preserve the source entry name at archive root
+    local tar_args=()
+    [[ -n "${compress}" ]] && tar_args+=("${compress}")
+    tar_args+=(-f "/out/${archive_name}" \
+                -C "$(dirname "${src_abs}")" \
+                "$(basename "${src_abs}")")
+    tar -c "${tar_args[@]}"
 }
 
 # ---------------------------------------------------------------------------
-# Subcommand: shell
+# Subcommand: browse
 # ---------------------------------------------------------------------------
 
-do_shell() {
+# Launch Midnight Commander (mc) rooted at the mounted partition.
+# Requires a TTY; the host wrapper always passes -i -t.
+# Args:
+#   None
+# Returns:
+#   Exit code from mc; runs until the user quits the file manager.
+do_browse() {
     mount_partition
-    export PS1="(usb-explore p${USB_PARTITION}) \w \$ "
     cd /mnt/part
-    exec bash --norc --noprofile
+    local _mc_rc=0
+    mc /mnt/part || _mc_rc=$?
+    # mc enables mouse tracking and alternate-screen mode and does not always
+    # disable them cleanly on exit (e.g. when its Ctrl-O subshell is still
+    # running).  \033c is the VT100 "Reset to Initial State" sequence: it
+    # exits the alternate screen, disables all mouse-tracking modes, and
+    # resets SGR attributes.  Emitting it here ensures the host terminal is
+    # clean before the container process exits and Docker kills any lingering
+    # mc subprocesses.
+    printf '\033c'
+    return "${_mc_rc}"
 }
 
 # ---------------------------------------------------------------------------
@@ -205,20 +258,6 @@ do_copy() {
 }
 
 # ---------------------------------------------------------------------------
-# Subcommand: run
-# ---------------------------------------------------------------------------
-
-# Args: command and arguments, with leading / paths already rewritten to
-# /mnt/part/<path> by the host wrapper before being passed in.
-# CWD is set to /mnt/part so that bare commands like 'ls' or 'find .'
-# operate on the partition root rather than the container root.
-do_run() {
-    mount_partition
-    cd /mnt/part
-    exec "$@"
-}
-
-# ---------------------------------------------------------------------------
 # Subcommand: diff
 # ---------------------------------------------------------------------------
 
@@ -237,15 +276,193 @@ do_diff() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: find
+# ---------------------------------------------------------------------------
+
+# Search the mounted partition by filename glob, file contents, or both.
+# Strips the /mnt/part prefix from all output so paths are usable directly
+# with other subcommands (copy, archive, diff).
+# Args:
+#   [NAME-GLOB]     glob matched against file basenames
+#   [--grep PAT]    pattern searched in file contents (grep -E syntax)
+# Returns:
+#   0 on success; 1 when --grep finds no matches (standard grep exit)
+do_find() {
+    local name_pattern="" grep_pattern=""
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            --grep)
+                [[ -n "${2:-}" ]] \
+                    || { echo "error: --grep requires a pattern" >&2; exit 1; }
+                grep_pattern="${2}"; shift ;;
+            -*)
+                echo "error: unknown find option: ${1}" >&2; exit 1 ;;
+            *)
+                if [[ -z "${name_pattern}" ]]; then
+                    name_pattern="${1}"
+                else
+                    echo "error: unexpected argument: ${1}" >&2; exit 1
+                fi ;;
+        esac
+        shift
+    done
+
+    [[ -n "${name_pattern}" || -n "${grep_pattern}" ]] \
+        || { echo "error: find requires a NAME-GLOB and/or --grep PATTERN" >&2
+             exit 1; }
+
+    mount_partition
+
+    if [[ -n "${grep_pattern}" ]]; then
+        # Build grep args; --include restricts to filenames when combined
+        local grep_args=(-r -H)
+        [[ -n "${name_pattern}" ]] \
+            && grep_args+=(--include="${name_pattern}")
+        grep_args+=(-- "${grep_pattern}" /mnt/part)
+        grep "${grep_args[@]}" | sed 's|^/mnt/part||'
+    else
+        find /mnt/part -name "${name_pattern}" | sed 's|^/mnt/part||'
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: hash
+# ---------------------------------------------------------------------------
+
+# Print the SHA-256 checksum of a single file from the mounted partition.
+# The output path is rewritten to partition-relative so users can paste it
+# directly into copy/archive/diff without stripping /mnt/part manually.
+# Args:
+#   $1  path — absolute path within the partition
+# Returns:
+#   0 on success; 1 if the path does not exist or is a directory
+do_hash() {
+    local src="${1}"
+    mount_partition
+
+    local src_abs="/mnt/part/${src#/}"
+    if [[ ! -e "${src_abs}" ]]; then
+        echo "error: path not found in image: ${src}" >&2
+        exit 1
+    fi
+    if [[ -d "${src_abs}" ]]; then
+        echo "error: ${src} is a directory; hash requires a file" >&2
+        exit 1
+    fi
+
+    # sha256sum output: "<digest>  <path>" — rewrite container path to
+    # the partition-relative form the user supplied.
+    sha256sum "${src_abs}" | sed "s| ${src_abs}$| ${src}|"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: info
+# ---------------------------------------------------------------------------
+
+do_info() {
+    exec /usr/local/lib/usb-explore/info.sh "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: run
+# ---------------------------------------------------------------------------
+
+# Args: command and arguments, with leading / paths already rewritten to
+# /mnt/part/<path> by the host wrapper before being passed in.
+# CWD is set to /mnt/part so that bare commands like 'ls' or 'find .'
+# operate on the partition root rather than the container root.
+# Output is filtered to strip the /mnt/part prefix from any paths so that
+# callers can pipe run output directly into copy/archive/hash/diff.
+do_run() {
+    mount_partition
+    cd /mnt/part
+    "$@" | sed 's|/mnt/part/|/|g'
+    return "${PIPESTATUS[0]}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: select-partition
+# ---------------------------------------------------------------------------
+
+# Auto-select a mountable partition and print its metadata to stdout.
+# Runs info.sh internally; no loop device setup is performed.
+# Called by the host wrapper's resolve_partition so that all jq processing
+# stays inside the container (jq is guaranteed installed; host may not have it).
+# Args:
+#   None
+# Returns:
+#   0 and writes "<number> <fstype> <size_human>" to stdout (exactly 1 match)
+#   5 if no mountable or multiple mountable partitions (table/error to stderr)
+do_select_partition() {
+    local json mountable count
+    json=$(/usr/local/lib/usb-explore/info.sh --json 2>/dev/null)
+    mountable=$(echo "${json}" | jq '[.partitions[] | select(.mountable == true)]')
+    count=$(echo "${mountable}" | jq 'length')
+
+    case "${count}" in
+        0)
+            echo "error: no mountable partitions found in /disk.img" >&2
+            echo "       Run 'usb-explore info' to see the full partition table" >&2
+            exit 5 ;;
+        1)
+            local num fs size
+            num=$(echo "${mountable}" | jq -r '.[0].number')
+            fs=$(echo "${mountable}"  | jq -r '.[0].fstype')
+            size=$(echo "${mountable}" | jq -r '.[0].size_human')
+            echo "${num} ${fs} ${size}" ;;
+        *)
+            /usr/local/lib/usb-explore/info.sh >&2
+            echo "error: multiple mountable partitions found" >&2
+            echo "       Pass -p|--partition N to select one" >&2
+            exit 5 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: serve
+# ---------------------------------------------------------------------------
+
+# Serve the mounted partition as a read-only HTTP directory index on port 8080.
+# The host wrapper maps a host port to this container port via -p.
+do_serve() {
+    mount_partition
+    exec python3 -m http.server 8080 --directory /mnt/part
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: shell
+# ---------------------------------------------------------------------------
+
+do_shell() {
+    mount_partition
+    export PS1="(usb-explore p${USB_PARTITION}) \w \$ "
+    cd /mnt/part
+    # Disable bracketed-paste mode (bash 5.1+ default).  Without this,
+    # readline emits [?2004h/[?2004l escape sequences around each accepted
+    # command, which changes the CRLF structure of the output and breaks
+    # the host-side cursor cleanup that erases the trailing 'exit' line.
+    local _rc
+    _rc=$(mktemp)
+    printf 'set enable-bracketed-paste off\n' > "${_rc}"
+    INPUTRC="${_rc}" exec bash --norc --noprofile
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
 case "${SUBCOMMAND}" in
-    info)  do_info  "$@" ;;
-    shell) do_shell "$@" ;;
-    copy)  do_copy  "$@" ;;
-    run)   do_run   "$@" ;;
-    diff)  do_diff  "$@" ;;
+    archive) do_archive "$@" ;;
+    browse)  do_browse  "$@" ;;
+    copy)    do_copy    "$@" ;;
+    diff)    do_diff    "$@" ;;
+    find)    do_find    "$@" ;;
+    hash)    do_hash    "$@" ;;
+    info)    do_info    "$@" ;;
+    run)              do_run              "$@" ;;
+    select-partition) do_select_partition "$@" ;;
+    serve)            do_serve            "$@" ;;
+    shell)   do_shell   "$@" ;;
     *)
         echo "error: unknown subcommand '${SUBCOMMAND}'" >&2
         exit 2 ;;

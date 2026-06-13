@@ -24,12 +24,15 @@ request.
 1. Create `src/container/drivers/<name>.sh` implementing `<name>_detect`,
    `<name>_mount`, and `<name>_unmount`.
 2. Register the driver in `src/container/dispatch.sh` by appending
-   `<name>_driver` to `FS_DRIVERS`.
+   `<name>` to `FS_DRIVERS` (e.g. `FS_DRIVERS=(ext xfs vfat iso9660 <name>)`).
 3. Add the required package to `Dockerfile`.
 4. Add a fixture image and test cases in `test/05-partition-discovery.bats`
    and `test/06-subcommands.bats`.
-5. Update `src/container/info.sh` to remove the filesystem from the
-   "not supported" error table.
+5. Remove the filesystem from both "not supported" locations:
+   - `src/container/info.sh` — the `MOUNTABLE=false` case in the
+     filesystem classification block.
+   - `src/container/dispatch.sh` — the explicit error `case` arm at the
+     bottom of `mount_partition`.
 
 ## Pull requests
 
