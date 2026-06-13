@@ -20,6 +20,7 @@ jobs:
     with:
       image: 1121citrus/usb-explore
       inject-metadata: true
+      force-push: true
       test-mode: bats-docker-cli
       test-bats-files: |
         test/01-build.bats
