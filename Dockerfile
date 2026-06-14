@@ -41,6 +41,7 @@ LABEL org.opencontainers.image.authors="${AUTHORS}"
 RUN apt-get update \
  && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
+      btrfs-progs \
       bzip2 \
       diffutils \
       e2fsprogs \

@@ -98,6 +98,16 @@ run_in_image() {
     [ "${status}" -eq 0 ]
 }
 
+@test "image: btrfs is present" {
+    run run_in_image 'command -v btrfs'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: drivers/btrfs.sh is installed and executable" {
+    run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/btrfs.sh'
+    [ "${status}" -eq 0 ]
+}
+
 @test "image: drivers/ext.sh is installed and executable" {
     run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/ext.sh'
     [ "${status}" -eq 0 ]

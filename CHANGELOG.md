@@ -9,6 +9,29 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- btrfs filesystem driver (`src/container/drivers/btrfs.sh`). btrfs
+  partitions are now mountable via kernel mount (`mount -t btrfs
+  -o ro,degraded`). The `degraded` flag permits mounting single-device
+  images that were captured from a multi-device btrfs volume.
+  Tests skip gracefully when the btrfs kernel module is absent.
+- `btrfs-progs` package added to the Docker image, providing the `btrfs`
+  CLI for use in `shell` and `browse` sessions.
+- `btrfs.img` test fixture: GPT, EFI (100 MB) + btrfs root (300 MB),
+  with `/etc/hostname` planted when the kernel module is available in
+  the generation container.
+
+### Tests
+
+- `test/02-image-structure.bats`: verifies `drivers/btrfs.sh` is
+  installed and executable; verifies `btrfs` binary is present.
+- `test/05-partition-discovery.bats`: three tests covering btrfs
+  partition count, mountability, and human-readable `info` output.
+- `test/06-subcommands.bats`: btrfs partition identified by `info
+  --json`; `run cat /etc/hostname` reads fixture content (skips when
+  kernel module unavailable or `/etc/hostname` was not planted).
+
 ---
 
 ## [1.1.0] — 2026-06-14

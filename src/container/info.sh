@@ -78,7 +78,6 @@ classify_partition() {
     fi
 
     case "${fstype}" in
-        btrfs)   MOUNTABLE=false; MOUNTABLE_REASON="btrfs not supported in this version"; return ;;
         swap|"") MOUNTABLE=false; MOUNTABLE_REASON="no recognised filesystem"; return ;;
     esac
 }

@@ -113,6 +113,7 @@ Filesystem support is implemented via a modular driver system inside the contain
 | ext2 / ext3 / ext4 | Ubuntu, Debian, most Linux installs |
 | xfs | RHEL, Rocky Linux, AlmaLinux |
 | vfat | EFI system partitions, legacy boot media |
+| btrfs | openSUSE, Fedora (default since F33), NAS appliances |
 | squashfs | Live ISOs (Ubuntu `/casper/filesystem.squashfs`), embedded root filesystems |
 | iso9660 | Hybrid bootable ISO/GPT images |
 

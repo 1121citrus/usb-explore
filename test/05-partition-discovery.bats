@@ -191,3 +191,35 @@ info_json() {
     [[ "${output}" == *"squashfs"* ]]
     [[ "${output}" == *"mountable"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# btrfs.img
+# ---------------------------------------------------------------------------
+
+@test "discovery: btrfs.img has 2 partitions" {
+    [[ -f "${FIXTURES}/btrfs.img" ]] || skip "fixture btrfs.img not generated"
+    local json count
+    json=$(info_json btrfs.img)
+    count=$(jq_from_json "${json}" '.partitions | length')
+    [ "${count}" -eq 2 ]
+}
+
+@test "discovery: btrfs.img partition 2 is mountable btrfs" {
+    [[ -f "${FIXTURES}/btrfs.img" ]] || skip "fixture btrfs.img not generated"
+    local json fstype mountable
+    json=$(info_json btrfs.img)
+    fstype=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .fstype')
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .mountable')
+    [ "${fstype}" = "btrfs" ]
+    [ "${mountable}" = "true" ]
+}
+
+@test "discovery: btrfs.img info shows btrfs as mountable" {
+    [[ -f "${FIXTURES}/btrfs.img" ]] || skip "fixture btrfs.img not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/btrfs.img:/disk.img:ro" \
+        "${IMAGE}" info
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"btrfs"* ]]
+    [[ "${output}" == *"mountable"* ]]
+}

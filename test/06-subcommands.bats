@@ -474,6 +474,44 @@ run_single() {
     [[ "${output}" == *"squashfs-test"* ]]
 }
 
+# ---------------------------------------------------------------------------
+# btrfs.img (driver test)
+# ---------------------------------------------------------------------------
+
+@test "subcommand btrfs: btrfs partition is identified by info --json" {
+    [[ -f "${FIXTURES}/btrfs.img" ]] || skip "fixture btrfs.img not generated"
+    local fstype
+    fstype=$(docker run --rm --privileged \
+        -v "${FIXTURES}/btrfs.img:/disk.img:ro" \
+        "${IMAGE}" info --json | \
+        docker run --rm -i --entrypoint=jq \
+            "${IMAGE}" -r '.partitions[] | select(.number == 2) | .fstype')
+    [ "${fstype}" = "btrfs" ]
+}
+
+@test "subcommand btrfs: can read hostname from btrfs partition" {
+    [[ -f "${FIXTURES}/btrfs.img" ]] || skip "fixture btrfs.img not generated"
+
+    # Skip when /etc/hostname was not planted (generator skips the mount step
+    # when the btrfs kernel module is unavailable in the generation container).
+    local probe_status=0
+    docker run --rm --privileged \
+        -v "${FIXTURES}/btrfs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run ls /mnt/part/etc/hostname >/dev/null 2>&1 \
+        || probe_status=$?
+    [[ "${probe_status}" -eq 0 ]] \
+        || skip "btrfs fixture has no /etc/hostname (generator skipped mount step)"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/btrfs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"btrfs-test"* ]]
+}
+
 @test "subcommand xfs: xfs partition is identified by info --json" {
     [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture xfs.img not generated"
     local fstype

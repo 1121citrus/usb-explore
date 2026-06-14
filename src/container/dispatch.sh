@@ -19,10 +19,9 @@ for _drv in "${DRIVER_DIR}"/*.sh; do source "${_drv}"; done
 # <name>_unmount functions defined in src/container/drivers/<name>.sh, plus
 # the corresponding package added to the Dockerfile.
 # To add a driver: append its name here and follow CONTRIBUTING.md.
-# Known candidates: btrfs (needs btrfs-progs and btrfs kernel module).
 # iso9660 must come AFTER vfat: it activates only for partitions with NO
 # partition-level filesystem, so vfat (EFI) is handled first and wins.
-FS_DRIVERS=(ext xfs vfat squashfs iso9660)
+FS_DRIVERS=(ext xfs vfat squashfs btrfs iso9660)
 
 # ---------------------------------------------------------------------------
 # Loop device tracking (populated by attach_partition)
@@ -146,8 +145,6 @@ mount_partition() {
     done
 
     case "${fstype}" in
-        btrfs)
-            echo "error: btrfs is not supported in this version." >&2 ;;
         unknown|"")
             echo "error: partition ${USB_PARTITION} contains no" >&2
             echo "       recognised filesystem." >&2 ;;

@@ -47,7 +47,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 DEBIAN_FRONTEND=noninteractive apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends \
        gdisk dosfstools e2fsprogs xfsprogs fdisk util-linux parted jq \
-       squashfs-tools >/dev/null 2>&1
+       btrfs-progs squashfs-tools >/dev/null 2>&1
 
 # part_loop — create a read-only loop device for one partition using
 # byte offsets computed from sfdisk. Works on any file reachable from
@@ -277,6 +277,40 @@ dd if=/tmp/content.sfs of="${LP2}" bs=4M 2>/dev/null
 losetup -d "${LP1}" "${LP2}"
 trap - EXIT
 cp "${IMG}" /fixtures/squashfs.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# btrfs.img: GPT, EFI (100 MB) + btrfs root (300 MB)
+# btrfs requires a minimum partition size (~109 MB with default block groups);
+# 300 MB is comfortably above that threshold.
+# ---------------------------------------------------------------------------
+make_image btrfs.img <<'SCRIPT'
+IMG=/tmp/btrfs.img
+truncate -s 460M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+100M -t 1:ef00 -c 1:"EFI" \
+    -n 2:0:+300M -t 2:8300 -c 2:"btrfs-root" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+LP2=$(part_loop "${IMG}" 2)
+trap 'umount /mnt 2>/dev/null||true; losetup -d "${LP1}" "${LP2}" 2>/dev/null||true' EXIT
+
+mkfs.fat -F32 -n EFI "${LP1}" >/dev/null
+mkfs.btrfs -q -L rootfs "${LP2}"
+
+# Attempt to load the btrfs kernel module then mount and plant /etc/hostname.
+# If the module is unavailable (some Docker VMs), the image is still usable
+# for partition-discovery tests via blkid; the subcommand test skips gracefully.
+modprobe btrfs 2>/dev/null || true
+if mount -o degraded "${LP2}" /mnt 2>/dev/null; then
+    mkdir -p /mnt/etc
+    echo "btrfs-test" > /mnt/etc/hostname
+    umount /mnt
+fi
+
+losetup -d "${LP1}" "${LP2}"
+trap - EXIT
+cp "${IMG}" /fixtures/btrfs.img
 SCRIPT
 
 log "All fixtures generated."
