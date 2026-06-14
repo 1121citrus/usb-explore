@@ -106,7 +106,17 @@ Because Docker Desktop for macOS virtualizes Linux but does not expose raw host 
 1. **Host capture**: A native macOS script uses `dd` to copy the physical USB drive to a sparse image file block-by-block.
 2. **Container isolation**: The image file is bind-mounted into a minimal Ubuntu-based Docker container. The container uses standard Linux utilities (`sfdisk`, `losetup`, `blkid`, `mount`) to parse the partition table and attach loop devices.
 
-Filesystem support (ext4, xfs, vfat, iso9660) is implemented via a modular driver system inside the container. All partition mounts are strictly read-only, guaranteeing the captured disk image remains immutable. While the container requires `--privileged` to manage loop devices, its access is bounded by the Docker Desktop Linux VM, safely isolating the macOS host.
+Filesystem support is implemented via a modular driver system inside the container:
+
+| Filesystem | Typical use |
+| --- | --- |
+| ext2 / ext3 / ext4 | Ubuntu, Debian, most Linux installs |
+| xfs | RHEL, Rocky Linux, AlmaLinux |
+| vfat | EFI system partitions, legacy boot media |
+| squashfs | Live ISOs (Ubuntu `/casper/filesystem.squashfs`), embedded root filesystems |
+| iso9660 | Hybrid bootable ISO/GPT images |
+
+All partition mounts are strictly read-only, guaranteeing the captured disk image remains immutable. While the container requires `--privileged` to manage loop devices, its access is bounded by the Docker Desktop Linux VM, safely isolating the macOS host.
 
 ---
 
@@ -227,10 +237,10 @@ Image:  usb.img  (29.8 GB)
 Scheme: GPT
 
   #   Filesystem   Size      Label              UUID          Notes
-  1   vfat         200 MB    EFI                2C3D-AF1B     [EFI — not mountable]
+  1   vfat         200 MB    EFI                2C3D-AF1B     [mountable]
   2   ext4         29.0 GB   cloudimg-rootfs    a1b2c3d4      [mountable]
 
-1 mountable partition found. Omit -p to auto-select, or pass -p 2 explicitly.
+2 mountable partitions found. Pass -p N to select one.
 ```
 
 `--json` emits machine-readable JSON for scripting.
@@ -475,17 +485,19 @@ you are modifying the tool itself. See [Building from source](#building-from-sou
 
 ## Partition selection
 
-Most drives have one main partition and one EFI (boot) partition. The
-EFI partition is automatically excluded. When only one mountable
-partition is found, it is selected automatically.
-
-When a drive has two or more mountable partitions, `usb-explore info` is
-printed and you must specify which one with `-p`:
+Most drives have one main data partition and one EFI (boot) partition.
+Both are considered mountable — the vfat driver handles EFI partitions.
+When exactly one mountable partition is found, it is selected
+automatically. When two or more are found, `usb-explore info` is printed
+and you must select one with `-p`:
 
 ```bash
 usb-explore shell -p 2       # use partition 2
 usb-explore copy -p 3 /etc ./etc-from-p3
 ```
+
+BIOS Boot, Linux swap, and LVM physical volume partitions are excluded
+from the mountable count.
 
 ---
 
