@@ -33,4 +33,5 @@ jobs:
         test/08-cli.bats
       test-pre-command: bash fixtures/generate.sh
       trivyignore: .trivyignore.yaml
+      auto-promote: full
     secrets: inherit
