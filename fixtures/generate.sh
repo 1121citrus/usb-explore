@@ -46,7 +46,8 @@ make_image() {
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 DEBIAN_FRONTEND=noninteractive apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends \
-       gdisk dosfstools e2fsprogs xfsprogs fdisk util-linux parted jq >/dev/null 2>&1
+       gdisk dosfstools e2fsprogs xfsprogs fdisk util-linux parted jq \
+       squashfs-tools >/dev/null 2>&1
 
 # part_loop — create a read-only loop device for one partition using
 # byte offsets computed from sfdisk. Works on any file reachable from
@@ -242,6 +243,40 @@ debugfs -w -R "set_super_value s_feature_incompat ${new_incompat}" "${LP2}" 2>/d
 losetup -d "${LP1}" "${LP2}"
 trap - EXIT
 cp "${IMG}" /fixtures/dirty-ext4.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# squashfs.img: GPT, EFI (100 MB) + squashfs root (100 MB)
+# squashfs is a compressed read-only filesystem. mksquashfs creates the image
+# from a directory tree; dd writes it to the raw partition so blkid can probe
+# the squashfs magic. No kernel module is needed for creation.
+# ---------------------------------------------------------------------------
+make_image squashfs.img <<'SCRIPT'
+IMG=/tmp/squashfs.img
+truncate -s 260M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+100M -t 1:ef00 -c 1:"EFI" \
+    -n 2:0:+100M -t 2:8300 -c 2:"squashfs-root" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+LP2=$(part_loop "${IMG}" 2)
+trap 'losetup -d "${LP1}" "${LP2}" 2>/dev/null||true' EXIT
+
+mkfs.fat -F32 -n EFI "${LP1}" >/dev/null
+
+# Build squashfs content tree and write to the raw partition.
+# mksquashfs is a userspace tool; no kernel module required for creation.
+SQDIR=/tmp/squashfs-content
+mkdir -p "${SQDIR}/etc"
+echo "squashfs-test"   > "${SQDIR}/etc/hostname"
+echo "ID=squashfs-test" > "${SQDIR}/etc/os-release"
+
+mksquashfs "${SQDIR}" /tmp/content.sfs -noappend -quiet
+dd if=/tmp/content.sfs of="${LP2}" bs=4M 2>/dev/null
+
+losetup -d "${LP1}" "${LP2}"
+trap - EXIT
+cp "${IMG}" /fixtures/squashfs.img
 SCRIPT
 
 log "All fixtures generated."

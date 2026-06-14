@@ -108,8 +108,18 @@ run_in_image() {
     [ "${status}" -eq 0 ]
 }
 
+@test "image: drivers/squashfs.sh is installed and executable" {
+    run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/squashfs.sh'
+    [ "${status}" -eq 0 ]
+}
+
 @test "image: drivers/vfat.sh is installed and executable" {
     run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/vfat.sh'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: unsquashfs is present" {
+    run run_in_image 'command -v unsquashfs'
     [ "${status}" -eq 0 ]
 }
 

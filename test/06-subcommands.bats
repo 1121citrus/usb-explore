@@ -436,6 +436,44 @@ run_single() {
 # xfs.img (driver test)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# squashfs.img (driver test)
+# ---------------------------------------------------------------------------
+
+@test "subcommand squashfs: squashfs partition is identified by info --json" {
+    [[ -f "${FIXTURES}/squashfs.img" ]] || skip "fixture squashfs.img not generated"
+    local fstype
+    fstype=$(docker run --rm --privileged \
+        -v "${FIXTURES}/squashfs.img:/disk.img:ro" \
+        "${IMAGE}" info --json | \
+        docker run --rm -i --entrypoint=jq \
+            "${IMAGE}" -r '.partitions[] | select(.number == 2) | .fstype')
+    [ "${fstype}" = "squashfs" ]
+}
+
+@test "subcommand squashfs: can read hostname from squashfs partition" {
+    [[ -f "${FIXTURES}/squashfs.img" ]] || skip "fixture squashfs.img not generated"
+
+    # squashfs mounting requires the squashfs kernel module in the Docker VM.
+    # Skip gracefully when the module is unavailable.
+    local probe_status=0
+    docker run --rm --privileged \
+        -v "${FIXTURES}/squashfs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run ls /mnt/part/etc/hostname >/dev/null 2>&1 \
+        || probe_status=$?
+    [[ "${probe_status}" -eq 0 ]] \
+        || skip "squashfs kernel module unavailable in this Docker VM"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/squashfs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"squashfs-test"* ]]
+}
+
 @test "subcommand xfs: xfs partition is identified by info --json" {
     [[ -f "${FIXTURES}/xfs.img" ]] || skip "fixture xfs.img not generated"
     local fstype

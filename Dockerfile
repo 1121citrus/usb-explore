@@ -51,6 +51,7 @@ RUN apt-get update \
       ncdu \
       python3 \
       rsync \
+      squashfs-tools \
       util-linux \
       xfsprogs \
       xz-utils \

@@ -159,3 +159,35 @@ info_json() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"2 mountable"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# squashfs.img
+# ---------------------------------------------------------------------------
+
+@test "discovery: squashfs.img has 2 partitions" {
+    [[ -f "${FIXTURES}/squashfs.img" ]] || skip "fixture squashfs.img not generated"
+    local json count
+    json=$(info_json squashfs.img)
+    count=$(jq_from_json "${json}" '.partitions | length')
+    [ "${count}" -eq 2 ]
+}
+
+@test "discovery: squashfs.img partition 2 is mountable squashfs" {
+    [[ -f "${FIXTURES}/squashfs.img" ]] || skip "fixture squashfs.img not generated"
+    local json fstype mountable
+    json=$(info_json squashfs.img)
+    fstype=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .fstype')
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .mountable')
+    [ "${fstype}" = "squashfs" ]
+    [ "${mountable}" = "true" ]
+}
+
+@test "discovery: squashfs.img info shows squashfs as mountable" {
+    [[ -f "${FIXTURES}/squashfs.img" ]] || skip "fixture squashfs.img not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/squashfs.img:/disk.img:ro" \
+        "${IMAGE}" info
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"squashfs"* ]]
+    [[ "${output}" == *"mountable"* ]]
+}

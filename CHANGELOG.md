@@ -9,6 +9,27 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- squashfs filesystem driver (`src/container/drivers/squashfs.sh`). squashfs
+  partitions are now mountable via kernel mount (`mount -t squashfs -o ro`).
+  Requires the squashfs kernel module in the Docker VM (available in Docker
+  Desktop on macOS and Linux); tests skip gracefully when the module is absent.
+- `squashfs-tools` package added to the Docker image, providing `unsquashfs`
+  and `mksquashfs` for use in `shell` and `browse` sessions.
+- `squashfs.img` test fixture: GPT, EFI (100 MB) + squashfs root (100 MB),
+  with `/etc/hostname` and `/etc/os-release` planted at build time.
+
+### Tests
+
+- `test/02-image-structure.bats`: verifies `drivers/squashfs.sh` is installed
+  and executable; verifies `unsquashfs` binary is present.
+- `test/05-partition-discovery.bats`: three tests covering squashfs partition
+  count, mountability, and human-readable `info` output.
+- `test/06-subcommands.bats`: squashfs partition identified by `info --json`;
+  `run cat /etc/hostname` reads fixture content (skips when kernel module
+  unavailable).
+
 ---
 
 ## [1.0.1] — 2026-06-13
