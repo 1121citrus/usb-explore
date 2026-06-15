@@ -550,6 +550,48 @@ run_single() {
 # raw.img
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# erofs.img (driver test)
+# ---------------------------------------------------------------------------
+
+@test "subcommand erofs: erofs partition is identified by info --json" {
+    [[ -f "${FIXTURES}/erofs.img" ]] || skip "fixture erofs.img not generated"
+    local fstype
+    fstype=$(docker run --rm --privileged \
+        -v "${FIXTURES}/erofs.img:/disk.img:ro" \
+        "${IMAGE}" info --json | \
+        docker run --rm -i --entrypoint=jq \
+            "${IMAGE}" -r '.partitions[] | select(.number == 2) | .fstype')
+    [ "${fstype}" = "erofs" ]
+}
+
+@test "subcommand erofs: can read hostname from erofs partition" {
+    [[ -f "${FIXTURES}/erofs.img" ]] || skip "fixture erofs.img not generated"
+
+    # erofs mounting requires the erofs kernel module in the Docker VM.
+    # Skip gracefully when the module is unavailable.
+    local probe_status=0
+    docker run --rm --privileged \
+        -v "${FIXTURES}/erofs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run ls /mnt/part/etc/hostname >/dev/null 2>&1 \
+        || probe_status=$?
+    [[ "${probe_status}" -eq 0 ]] \
+        || skip "erofs kernel module unavailable in this Docker VM"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/erofs.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"erofs-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# raw.img
+# ---------------------------------------------------------------------------
+
 @test "subcommand info --json: raw.img partition 2 raw_hint is non-null" {
     [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
     local hint

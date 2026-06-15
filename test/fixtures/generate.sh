@@ -12,6 +12,7 @@
 #   squashfs.img     — GPT, 100 MB EFI + 100 MB squashfs
 #   btrfs.img        — GPT, 100 MB EFI + 300 MB btrfs
 #   raw.img          — GPT, 100 MB EFI + 16 MB raw (no filesystem)
+#   erofs.img        — GPT, 100 MB EFI + 100 MB erofs (read-only)
 #
 # All disk operations work on /tmp/<img> inside the container (the container's
 # own overlay layer) to avoid virtiofs-vs-losetup compatibility issues.
@@ -51,7 +52,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 DEBIAN_FRONTEND=noninteractive apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends \
        gdisk dosfstools e2fsprogs xfsprogs fdisk util-linux parted jq \
-       btrfs-progs squashfs-tools >/dev/null 2>&1
+       btrfs-progs erofs-utils squashfs-tools >/dev/null 2>&1
 
 # part_loop — create a read-only loop device for one partition using
 # byte offsets computed from sfdisk. Works on any file reachable from
@@ -345,6 +346,40 @@ printf 'BOOT_A_LEFT=3\0BOOT_ORDER=B A\0MACHINE_ID=test1234\0' \
 losetup -d "${LP1}" "${LP2}"
 trap - EXIT
 cp "${IMG}" /fixtures/raw.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# erofs.img: GPT, EFI (100 MB) + erofs root (100 MB)
+# erofs is a compressed read-only filesystem used by HAOS system partitions.
+# mkfs.erofs creates the image from a directory tree; dd writes it to the
+# raw partition so blkid can probe the erofs magic. Mounting requires the
+# erofs kernel module in the Docker VM; creation is userspace-only.
+# ---------------------------------------------------------------------------
+make_image erofs.img <<'SCRIPT'
+IMG=/tmp/erofs.img
+truncate -s 260M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+100M -t 1:ef00 -c 1:"EFI" \
+    -n 2:0:+100M -t 2:8300 -c 2:"erofs-root" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+LP2=$(part_loop "${IMG}" 2)
+trap 'losetup -d "${LP1}" "${LP2}" 2>/dev/null||true' EXIT
+
+mkfs.fat -F32 -n EFI "${LP1}" >/dev/null
+
+# Build erofs content tree and write to the raw partition.
+# mkfs.erofs is a userspace tool; no kernel module required for creation.
+EROOT=/tmp/erofs-content
+mkdir -p "${EROOT}/etc"
+echo "erofs-test"    > "${EROOT}/etc/hostname"
+echo "ID=erofs-test" > "${EROOT}/etc/os-release"
+
+mkfs.erofs "${LP2}" "${EROOT}" >/dev/null 2>&1
+
+losetup -d "${LP1}" "${LP2}"
+trap - EXIT
+cp "${IMG}" /fixtures/erofs.img
 SCRIPT
 
 log "All fixtures generated."

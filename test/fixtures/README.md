@@ -18,6 +18,7 @@ tests, or let `./build` generate them automatically.
 | `squashfs.img` | GPT | EFI (100 MB) + squashfs root (100 MB) |
 | `btrfs.img` | GPT | EFI (100 MB) + btrfs root (300 MB) |
 | `raw.img` | GPT | EFI (100 MB) + raw unformatted partition (16 MB) |
+| `erofs.img` | GPT | EFI (100 MB) + erofs root (100 MB) |
 
 `dirty-ext4.img` simulates a USB captured without a clean unmount. The
 `EXT4_FEATURE_INCOMPAT_RECOVER` bit is set in the superblock after
@@ -30,6 +31,12 @@ nothing. It exercises `probe_raw_hint()` in `info.sh`: null-terminated
 key=value pairs are planted in the first 256 bytes, which the string-scan
 fallback recovers and displays as `[raw: BOOT_A_LEFT=3 ...]` in the Notes
 column.
+
+`erofs.img` has an erofs root partition — the filesystem used by HAOS
+`hassos-system0`/`hassos-system1` slots. It exercises the `erofs` driver
+in `src/container/drivers/erofs.sh`. Mounting is attempted at test time;
+the test skips gracefully when the erofs kernel module is unavailable in
+the Docker VM.
 
 ## Regenerating
 

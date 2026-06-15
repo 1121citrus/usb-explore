@@ -273,6 +273,38 @@ info_json() {
 }
 
 # ---------------------------------------------------------------------------
+# erofs.img
+# ---------------------------------------------------------------------------
+
+@test "discovery: erofs.img has 2 partitions" {
+    [[ -f "${FIXTURES}/erofs.img" ]] || skip "fixture erofs.img not generated"
+    local json count
+    json=$(info_json erofs.img)
+    count=$(jq_from_json "${json}" '.partitions | length')
+    [ "${count}" -eq 2 ]
+}
+
+@test "discovery: erofs.img partition 2 is mountable erofs" {
+    [[ -f "${FIXTURES}/erofs.img" ]] || skip "fixture erofs.img not generated"
+    local json fstype mountable
+    json=$(info_json erofs.img)
+    fstype=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .fstype')
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 2) | .mountable')
+    [ "${fstype}" = "erofs" ]
+    [ "${mountable}" = "true" ]
+}
+
+@test "discovery: erofs.img info shows erofs as mountable" {
+    [[ -f "${FIXTURES}/erofs.img" ]] || skip "fixture erofs.img not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/erofs.img:/disk.img:ro" \
+        "${IMAGE}" info
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"erofs"* ]]
+    [[ "${output}" == *"mountable"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # Blank image (no partition table)
 # ---------------------------------------------------------------------------
 

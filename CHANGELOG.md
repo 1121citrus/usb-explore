@@ -9,6 +9,18 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `erofs` filesystem driver (`src/container/drivers/erofs.sh`): HAOS
+  `hassos-system0` / `hassos-system1` partitions use erofs (Enhanced
+  Read-Only File System). The new driver adds detection, read-only mount,
+  and unmount support, making these partitions fully browsable. erofs is
+  already present in the Docker Desktop Linux VM kernel — no `modprobe`
+  needed. `erofs-utils` added to the Dockerfile for future tooling.
+- `erofs.img` test fixture: GPT, EFI (100 MB) + erofs root (100 MB) with
+  planted `/etc/hostname`. Tests cover partition count, `fstype: erofs`,
+  mountability, and hostname retrieval via `run cat`.
+
 ### Fixed
 
 - `info` / `info --json`: no longer exits silently when the disk image

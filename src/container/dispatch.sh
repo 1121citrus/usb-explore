@@ -21,7 +21,7 @@ for _drv in "${DRIVER_DIR}"/*.sh; do source "${_drv}"; done
 # To add a driver: append its name here and follow CONTRIBUTING.md.
 # iso9660 must come AFTER vfat: it activates only for partitions with NO
 # partition-level filesystem, so vfat (EFI) is handled first and wins.
-FS_DRIVERS=(ext xfs vfat squashfs btrfs iso9660)
+FS_DRIVERS=(ext xfs vfat squashfs btrfs erofs iso9660)
 
 # ---------------------------------------------------------------------------
 # Loop device tracking (populated by attach_partition)

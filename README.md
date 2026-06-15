@@ -115,6 +115,7 @@ Filesystem support is implemented via a modular driver system inside the contain
 | vfat | EFI system partitions, legacy boot media |
 | btrfs | openSUSE, Fedora (default since F33), NAS appliances |
 | squashfs | Live ISOs (Ubuntu `/casper/filesystem.squashfs`), embedded root filesystems |
+| erofs | Home Assistant OS system partitions (`hassos-system0`/`hassos-system1`) |
 | iso9660 | Hybrid bootable ISO/GPT images |
 
 All partition mounts are strictly read-only, guaranteeing the captured disk image remains immutable. While the container requires `--privileged` to manage loop devices, its access is bounded by the Docker Desktop Linux VM, safely isolating the macOS host.
