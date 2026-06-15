@@ -155,7 +155,11 @@ probe_raw_hint() {
 # Read partition table
 # ---------------------------------------------------------------------------
 
-SFDISK_JSON=$(sfdisk --json /disk.img 2>/dev/null)
+SFDISK_JSON=$(sfdisk --json /disk.img 2>/dev/null) || {
+    printf 'info: no recognised partition table in the disk image\n' >&2
+    printf 'info: the image may be unformatted, blank, or use an unsupported scheme\n' >&2
+    exit 1
+}
 LABEL=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.label')
 SECTOR_SIZE=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.sectorsize // 512')
 

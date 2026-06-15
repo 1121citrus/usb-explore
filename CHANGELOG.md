@@ -9,6 +9,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `info` / `info --json`: no longer exits silently when the disk image
+  has no recognised partition table (e.g. unformatted or blank USB). Now
+  prints `info: no recognised partition table in the disk image` followed
+  by a suggestion, then exits 1. Previously, `sfdisk --json` exited 1
+  with stderr suppressed (`2>/dev/null`) and `set -euo pipefail` caused
+  the script to exit immediately with no output.
+
 ---
 
 ## [1.4.0] — 2026-06-15

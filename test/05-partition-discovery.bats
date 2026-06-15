@@ -271,3 +271,19 @@ info_json() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"[raw:"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Blank image (no partition table)
+# ---------------------------------------------------------------------------
+
+@test "discovery: blank image exits non-zero with a clear error message" {
+    local blank
+    blank=$(mktemp /tmp/usb-blank-XXXXXX)
+    truncate -s 32M "${blank}"
+    run docker run --rm --privileged \
+        -v "${blank}:/disk.img:ro" \
+        "${IMAGE}" info
+    rm -f "${blank}"
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"no recognised partition table"* ]]
+}
