@@ -240,11 +240,26 @@ Scheme: GPT
   #   Filesystem   Size      Label              UUID          Notes
   1   vfat         200 MB    EFI                2C3D-AF1B     [mountable]
   2   ext4         29.0 GB   cloudimg-rootfs    a1b2c3d4      [mountable]
+  3   raw          8.0 MB    bootstate                        [raw: BOOT_ORDER=B A MACHINE_ID=...]
 
 2 mountable partitions found. Pass -p N to select one.
 ```
 
-`--json` emits machine-readable JSON for scripting.
+The **Notes** column shows:
+
+- `[mountable]` — a filesystem driver is available; the partition can be
+  used with `shell`, `copy`, `run`, etc.
+- `[raw: ...]` — no recognised filesystem (`blkid` found nothing).
+  `usb-explore` runs a two-stage probe to extract a short description:
+  first `file(1)` magic, then a null-terminated string scan. The extracted
+  strings appear in the note. These partitions cannot be mounted.
+- `[BIOS Boot Partition excluded]`, `[Linux swap excluded]`, etc. —
+  partition type is explicitly excluded from mounting.
+
+`--json` emits machine-readable JSON for scripting. Each partition record
+includes `fstype` (`"raw"` when no filesystem is detected), `mountable`,
+`mountable_reason`, and — for raw partitions — `raw_hint` (the same
+content shown in the Notes column, or `null` when nothing was found).
 
 ---
 
@@ -497,8 +512,8 @@ usb-explore shell -p 2       # use partition 2
 usb-explore copy -p 3 /etc ./etc-from-p3
 ```
 
-BIOS Boot, Linux swap, and LVM physical volume partitions are excluded
-from the mountable count.
+BIOS Boot, Linux swap, LVM physical volume, and raw (unrecognised
+filesystem) partitions are excluded from the mountable count.
 
 ---
 
