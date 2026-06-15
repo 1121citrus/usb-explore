@@ -545,3 +545,19 @@ run_single() {
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"xfs-test"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# raw.img
+# ---------------------------------------------------------------------------
+
+@test "subcommand info --json: raw.img partition 2 raw_hint is non-null" {
+    [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
+    local hint
+    hint=$(docker run --rm --privileged \
+        -v "${FIXTURES}/raw.img:/disk.img:ro" \
+        "${IMAGE}" info --json \
+        | docker run --rm -i --entrypoint=jq "${IMAGE}" -r \
+            '.partitions[] | select(.number == 2) | .raw_hint')
+    [[ "${hint}" != "null" ]]
+    [[ "${hint}" == *"BOOT_A_LEFT"* ]]
+}

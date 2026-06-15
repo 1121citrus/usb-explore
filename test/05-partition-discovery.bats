@@ -223,3 +223,51 @@ info_json() {
     [[ "${output}" == *"btrfs"* ]]
     [[ "${output}" == *"mountable"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# raw.img
+# ---------------------------------------------------------------------------
+
+@test "discovery: raw.img has 2 partitions" {
+    [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
+    local json count
+    json=$(info_json raw.img)
+    count=$(jq_from_json "${json}" '.partitions | length')
+    [ "${count}" -eq 2 ]
+}
+
+@test "discovery: raw.img partition 2 has fstype raw" {
+    [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
+    local json fstype
+    json=$(info_json raw.img)
+    fstype=$(jq_from_json "${json}" \
+        '.partitions[] | select(.number == 2) | .fstype')
+    [ "${fstype}" = "raw" ]
+}
+
+@test "discovery: raw.img partition 2 is not mountable" {
+    [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
+    local json mountable
+    json=$(info_json raw.img)
+    mountable=$(jq_from_json "${json}" \
+        '.partitions[] | select(.number == 2) | .mountable')
+    [ "${mountable}" = "false" ]
+}
+
+@test "discovery: raw.img partition 2 raw_hint contains key=value strings" {
+    [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
+    local json hint
+    json=$(info_json raw.img)
+    hint=$(jq_from_json "${json}" \
+        '.partitions[] | select(.number == 2) | .raw_hint')
+    [[ "${hint}" == *"BOOT_A_LEFT"* ]]
+}
+
+@test "discovery: raw.img info shows [raw: in Notes column" {
+    [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/raw.img:/disk.img:ro" \
+        "${IMAGE}" info
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"[raw:"* ]]
+}

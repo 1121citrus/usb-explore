@@ -9,6 +9,23 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `info` / `info --json`: raw partition detection via two-stage probe.
+  Partitions with no recognised filesystem now show `fstype: "raw"` (was
+  `"unknown"`) in JSON output, and carry a new `raw_hint` field containing
+  a short description extracted from the partition content. Stage 1 runs
+  `file(1)` magic on the first 4 KB (catches GRUB env blocks, kernels);
+  Stage 2 scans null-terminated strings in the first 256 bytes (covers
+  HAOS-style `key=value` bootstate stores where `file` returns `"data"`).
+  Human table output shows `[raw: BOOT_A_LEFT=3 BOOT_ORDER=B A ...]` in
+  the Notes column instead of `[no recognised filesystem]`. Partitions for
+  which no hint is found still show `fstype: "raw"` with `raw_hint: null`.
+- `raw.img` test fixture: GPT, EFI (100 MB) + raw (16 MB) partition with
+  planted null-terminated `key=value` strings simulating a HAOS bootstate
+  partition. Tests cover partition count, `fstype: raw`, non-mountability,
+  `raw_hint` content, and human table `[raw:` annotation.
+
 ---
 
 ## [1.3.1] — 2026-06-15

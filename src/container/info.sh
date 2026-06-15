@@ -119,6 +119,38 @@ probe_partition() {
         /disk.img 2>/dev/null || true
 }
 
+# probe_raw_hint — extract a short display hint for a partition with no
+# recognised filesystem. Two-stage fallback:
+#   1. file(1) magic on the first 4 KB (catches GRUB env blocks, kernels).
+#   2. Null-terminated string scan on the first 256 bytes (covers HAOS-style
+#      key=value bootstate stores where file(1) returns "data").
+# Args: $1 = byte offset
+# Returns: 0; writes hint string to stdout (empty if nothing found)
+probe_raw_hint() {
+    local offset="${1}"
+
+    # Stage 1: file(1) magic on first 4 KB.
+    local magic
+    magic=$(dd if=/disk.img iflag=skip_bytes skip="${offset}" \
+               bs=4096 count=1 2>/dev/null \
+            | file -b - 2>/dev/null) || true
+    case "${magic}" in
+        data|empty|"") ;;
+        *) echo "${magic}"; return ;;
+    esac
+
+    # Stage 2: null-terminated string scan on first 256 bytes.
+    local strings
+    strings=$(dd if=/disk.img iflag=skip_bytes skip="${offset}" \
+                 bs=256 count=1 2>/dev/null \
+              | tr '\000' '\n' \
+              | grep -E '^[[:print:]]{3,}$' \
+              | head -5 \
+              | tr '\n' ' ' \
+              | sed 's/ *$//') || true
+    [[ -n "${strings}" ]] && echo "${strings}" || true
+}
+
 # ---------------------------------------------------------------------------
 # Read partition table
 # ---------------------------------------------------------------------------
@@ -186,21 +218,28 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
     MOUNTABLE_REASON="null"
     classify_partition "${TYPE}" "${FSTYPE}" "${ATTRS}" "${SIZE_BYTES}"
 
+    RAW_HINT=""
+    if [[ "${MOUNTABLE}" == "false" \
+          && "${MOUNTABLE_REASON}" == "no recognised filesystem" ]]; then
+        RAW_HINT=$(probe_raw_hint "${OFFSET}")
+    fi
+
     RECORD=$(jq -n \
-        --argjson num    "${PART_NUM}" \
-        --arg     node   "${NODE}" \
-        --argjson start  "${START}" \
-        --argjson size_s "${SIZE_S}" \
-        --argjson size_b "${SIZE_BYTES}" \
-        --arg     size_h "${SIZE_HUMAN}" \
-        --arg     type   "${TYPE}" \
-        --arg     tname  "${TYPE_NAME}" \
-        --arg     fstype "${FSTYPE}" \
-        --arg     label  "${FS_LABEL}" \
-        --arg     uuid   "${UUID}" \
-        --arg     uuid_s "${UUID_SHORT}" \
-        --argjson mount  "${MOUNTABLE}" \
+        --argjson num     "${PART_NUM}" \
+        --arg     node    "${NODE}" \
+        --argjson start   "${START}" \
+        --argjson size_s  "${SIZE_S}" \
+        --argjson size_b  "${SIZE_BYTES}" \
+        --arg     size_h  "${SIZE_HUMAN}" \
+        --arg     type    "${TYPE}" \
+        --arg     tname   "${TYPE_NAME}" \
+        --arg     fstype  "${FSTYPE}" \
+        --arg     label   "${FS_LABEL}" \
+        --arg     uuid    "${UUID}" \
+        --arg     uuid_s  "${UUID_SHORT}" \
+        --argjson mount   "${MOUNTABLE}" \
         --arg     mreason "${MOUNTABLE_REASON}" \
+        --arg     rhint   "${RAW_HINT}" \
         '{
             number:           $num,
             node:             $node,
@@ -210,7 +249,8 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
             size_human:       $size_h,
             type_id:          $type,
             type_name:        $tname,
-            fstype:           (if $fstype == "" then "unknown" else $fstype end),
+            fstype:           (if $fstype == "" then "raw" else $fstype end),
+            raw_hint:         (if $rhint == "" then null else $rhint end),
             label:            $label,
             uuid:             $uuid,
             uuid_short:       $uuid_s,
@@ -265,16 +305,19 @@ printf "  %-3s  %-10s  %-10s  %-22s  %-10s  %s\n" \
     "#" "Filesystem" "Size" "Label" "UUID" "Notes"
 
 while IFS= read -r p; do
-    num=$(echo "${p}"    | jq -r '.number')
-    fstype=$(echo "${p}" | jq -r '.fstype')
-    size=$(echo "${p}"   | jq -r '.size_human')
-    lbl=$(echo "${p}"    | jq -r '.label')
-    uuid=$(echo "${p}"   | jq -r '.uuid_short')
-    mount=$(echo "${p}"  | jq -r '.mountable')
-    reason=$(echo "${p}" | jq -r '.mountable_reason // ""')
+    num=$(echo "${p}"      | jq -r '.number')
+    fstype=$(echo "${p}"   | jq -r '.fstype')
+    size=$(echo "${p}"     | jq -r '.size_human')
+    lbl=$(echo "${p}"      | jq -r '.label')
+    uuid=$(echo "${p}"     | jq -r '.uuid_short')
+    mount=$(echo "${p}"    | jq -r '.mountable')
+    reason=$(echo "${p}"   | jq -r '.mountable_reason // ""')
+    raw_hint=$(echo "${p}" | jq -r '.raw_hint // ""')
 
     if [[ "${mount}" == "true" ]]; then
         note="[mountable]"
+    elif [[ -n "${raw_hint}" ]]; then
+        note="[raw: ${raw_hint}]"
     else
         note="[${reason}]"
     fi

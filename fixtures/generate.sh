@@ -8,6 +8,10 @@
 #   dual-ext4.img    — GPT, 200 MB EFI + 300 MB ext4 + 200 MB ext4
 #   xfs.img          — GPT, 200 MB EFI + 400 MB xfs
 #   mbr.img          — MBR, 500 MB ext4
+#   dirty-ext4.img   — GPT, 100 MB EFI + 100 MB ext4 (needs_recovery set)
+#   squashfs.img     — GPT, 100 MB EFI + 100 MB squashfs
+#   btrfs.img        — GPT, 100 MB EFI + 300 MB btrfs
+#   raw.img          — GPT, 100 MB EFI + 16 MB raw (no filesystem)
 #
 # All disk operations work on /tmp/<img> inside the container (the container's
 # own overlay layer) to avoid virtiofs-vs-losetup compatibility issues.
@@ -311,6 +315,36 @@ fi
 losetup -d "${LP1}" "${LP2}"
 trap - EXIT
 cp "${IMG}" /fixtures/btrfs.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# raw.img: GPT, EFI (100 MB) + raw unformatted partition (16 MB)
+# No filesystem is created on the second partition so blkid finds nothing.
+# Null-terminated key=value pairs are written to the first 256 bytes to
+# exercise probe_raw_hint's string-scan fallback path.
+# ---------------------------------------------------------------------------
+make_image raw.img <<'SCRIPT'
+IMG=/tmp/raw.img
+truncate -s 160M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+100M -t 1:ef00 -c 1:"EFI" \
+    -n 2:0:+16M  -t 2:8300 -c 2:"hassos-bootstate" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+LP2=$(part_loop "${IMG}" 2)
+trap 'losetup -d "${LP1}" "${LP2}" 2>/dev/null||true' EXIT
+
+mkfs.fat -F32 -n EFI "${LP1}" >/dev/null
+
+# Write null-terminated key=value pairs at the start of the raw partition.
+# No filesystem — blkid will find no recognised type; probe_raw_hint
+# must recover the strings via the null-byte scan path.
+printf 'BOOT_A_LEFT=3\0BOOT_ORDER=B A\0MACHINE_ID=test1234\0' \
+    | dd of="${LP2}" conv=notrunc 2>/dev/null
+
+losetup -d "${LP1}" "${LP2}"
+trap - EXIT
+cp "${IMG}" /fixtures/raw.img
 SCRIPT
 
 log "All fixtures generated."
