@@ -6,7 +6,7 @@
 # All tests skip gracefully when fixture images are absent.
 
 IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
-FIXTURES="${BATS_TEST_DIRNAME}/../fixtures"
+FIXTURES="${BATS_TEST_DIRNAME}/fixtures"
 
 # jq_from_json — pipe JSON through jq inside the usb-explore container.
 # Args: $1 = JSON string, $2 = jq filter

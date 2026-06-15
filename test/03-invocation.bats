@@ -34,29 +34,29 @@ IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
 # ---------------------------------------------------------------------------
 
 @test "container: info --json on single-ext4.img returns valid JSON" {
-    [[ -f "${BATS_TEST_DIRNAME}/../fixtures/single-ext4.img" ]] \
+    [[ -f "${BATS_TEST_DIRNAME}/fixtures/single-ext4.img" ]] \
         || skip "fixture single-ext4.img not generated"
 
     run docker run --rm --privileged \
-        -v "${BATS_TEST_DIRNAME}/../fixtures/single-ext4.img:/disk.img:ro" \
+        -v "${BATS_TEST_DIRNAME}/fixtures/single-ext4.img:/disk.img:ro" \
         "${IMAGE}" info --json
 
     [ "${status}" -eq 0 ]
     # Validate JSON and partition count inside the container (jq is in the image)
     local part_count
     part_count=$(docker run --rm --privileged \
-        -v "${BATS_TEST_DIRNAME}/../fixtures/single-ext4.img:/disk.img:ro" \
+        -v "${BATS_TEST_DIRNAME}/fixtures/single-ext4.img:/disk.img:ro" \
         "${IMAGE}" info --json | \
         docker run --rm -i --entrypoint=jq "${IMAGE}" '.partitions | length')
     [[ "${part_count}" -gt 0 ]]
 }
 
 @test "container: info (human table) on single-ext4.img shows EFI and ext4" {
-    [[ -f "${BATS_TEST_DIRNAME}/../fixtures/single-ext4.img" ]] \
+    [[ -f "${BATS_TEST_DIRNAME}/fixtures/single-ext4.img" ]] \
         || skip "fixture single-ext4.img not generated"
 
     run docker run --rm --privileged \
-        -v "${BATS_TEST_DIRNAME}/../fixtures/single-ext4.img:/disk.img:ro" \
+        -v "${BATS_TEST_DIRNAME}/fixtures/single-ext4.img:/disk.img:ro" \
         "${IMAGE}" info
 
     [ "${status}" -eq 0 ]

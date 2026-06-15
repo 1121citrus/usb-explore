@@ -2,7 +2,7 @@
 # 06-subcommands.bats — end-to-end subcommand tests against fixture images.
 
 IMAGE="${IMAGE:-1121citrus/usb-explore:latest}"
-FIXTURES="${BATS_TEST_DIRNAME}/../fixtures"
+FIXTURES="${BATS_TEST_DIRNAME}/fixtures"
 
 setup() {
     TMPDIR_WORK=$(mktemp -d)

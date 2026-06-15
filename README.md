@@ -556,7 +556,7 @@ Docker so no additional tools are needed on the host.
 
 ```bash
 # Generate fixture disk images (run once; requires Docker)
-bash fixtures/generate.sh
+bash test/fixtures/generate.sh
 
 # Run the full test suite
 ./build --no-scan
