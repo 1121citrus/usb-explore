@@ -13,6 +13,15 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.3.0] — 2026-06-14
 
+### Changed
+
+- CI pipeline: opt in to `auto-promote: full`. After a successful CI run
+  on `dev`, the shared pipeline now automatically bumps the version,
+  promotes `[Unreleased]` in the CHANGELOG, fast-forward merges
+  `dev→main`, and pushes `dev/main/vX.Y.Z` atomically. Requires
+  `PROMOTE_TOKEN` (fine-grained PAT, `contents: write`) as a repository
+  secret; absent token degrades to `bump-only`.
+
 ---
 
 ## [1.2.0] — 2026-06-14
