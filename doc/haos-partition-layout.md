@@ -12,7 +12,7 @@ enhancement could add value.
 
 A typical HAOS image as reported by `usb-explore info`:
 
-```
+```text
 Image:  /disk.img  (28.8 GB)
 Scheme: GPT
 
@@ -30,7 +30,7 @@ Scheme: GPT
 ```
 
 | # | Label | Filesystem | Purpose |
-|---|-------|-----------|---------|
+| --- | --- | --- | --- |
 | 1 | `hassos-boot` | vfat | EFI/GRUB boot files |
 | 2 | `hassos-kernel0` | squashfs | Kernel image, slot A |
 | 3 | `hassos-system0` | squashfs | Root filesystem, slot A |
@@ -89,7 +89,7 @@ For a `hassos-bootstate` partition, probe 1 returns `data` (no recognised magic)
 and probe 2 extracts the readable boot state variables. The result appears in
 `usb-explore info` output as:
 
-```
+```text
   6    unknown     8.0 MB      hassos-bootstate        [raw: boot_systemslot=A ...]
 ```
 
@@ -103,7 +103,7 @@ The strings extracted by probe 2 are already human-readable, but a future
 enhancement could recognise the `hassos-bootstate` partition label specifically
 and format the hint more clearly:
 
-```
+```text
   6    unknown     8.0 MB      hassos-bootstate        [A/B state: active=A, a_ok=1, b_ok=0]
 ```
 
