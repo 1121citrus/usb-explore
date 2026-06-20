@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+
+# test-formula — validate the Homebrew formula using a Docker container.
+#
+# Copyright (C) 2026 1121 Citrus
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# SYNOPSIS
+#   test-formula [--skip-install] [--help]
+#
+# DESCRIPTION
+#   Runs the Homebrew formula through brew style, brew audit, brew
+#   install --HEAD, and post-install verification inside the
+#   homebrew/brew Docker image.
+#
+#   The formula's depends_on :macos constraint is removed for Linux
+#   testing.  The url/sha256 fields are also removed so --HEAD
+#   (git clone) is used instead of a release tarball.
+#
+# OPTIONS
+#   --skip-install   Run style and audit only; skip the slow install.
+#   --help           Print this help and exit.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FORMULA="${SCRIPT_DIR}/Formula/usb-explore.rb"
+BREW_IMAGE="homebrew/brew:latest"
+
+SKIP_INSTALL=false
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+log()  { printf "test-formula: %s\n" "$*" >&2; }
+err()  { printf "test-formula: error: %s\n" "$*" >&2; }
+die()  { err "$*"; exit 1; }
+pass() { printf "  PASS  %s\n" "$*" >&2; }
+fail() { printf "  FAIL  %s\n" "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --skip-install) SKIP_INSTALL=true ;;
+        --help|-h)
+            awk '/^# SYNOPSIS/{f=1;next} /^#$/{if(f)exit} f{sub(/^# ?/,""); print}' \
+                "${BASH_SOURCE[0]}"
+            exit 0 ;;
+        *) die "Unknown option: $1" ;;
+    esac
+    shift
+done
+
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+
+[[ -f "${FORMULA}" ]] || die "Formula not found: ${FORMULA}"
+
+if ! docker info >/dev/null 2>&1; then
+    die "Docker is not running"
+fi
+
+# ---------------------------------------------------------------------------
+# Run tests inside the Homebrew container
+# ---------------------------------------------------------------------------
+
+failures=0
+
+log "Using image ${BREW_IMAGE}"
+
+# Stage 1: brew style
+log "Stage 1: brew style"
+if cat "${FORMULA}" | docker run --rm -i "${BREW_IMAGE}" bash -c '
+    TAP_DIR="$(brew --repository)/Library/Taps/1121citrus/homebrew-usb-explore/Formula"
+    mkdir -p "${TAP_DIR}"
+    cat > "${TAP_DIR}/usb-explore.rb"
+    brew style "${TAP_DIR}/usb-explore.rb" 2>&1 \
+        | grep -v "^Warning: style is a developer" \
+        | grep -v "developer mode" \
+        | grep -v "brew developer off"
+'; then
+    pass "brew style"
+else
+    fail "brew style"
+    (( failures++ ))
+fi
+
+# Stage 2: brew audit
+log "Stage 2: brew audit"
+if cat "${FORMULA}" | docker run --rm -i "${BREW_IMAGE}" bash -c '
+    TAP_DIR="$(brew --repository)/Library/Taps/1121citrus/homebrew-usb-explore/Formula"
+    mkdir -p "${TAP_DIR}"
+    cat > "${TAP_DIR}/usb-explore.rb"
+    # Audit the formula; --except checksum skips sha256 validation
+    # since the placeholder hash is intentional until release.
+    brew audit --formula --except checksum \
+        1121citrus/usb-explore/usb-explore 2>&1
+'; then
+    pass "brew audit"
+else
+    fail "brew audit"
+    (( failures++ ))
+fi
+
+# Stage 3: brew install --HEAD and verification
+if [[ "${SKIP_INSTALL}" == true ]]; then
+    log "Stage 3: skipped (--skip-install)"
+else
+    log "Stage 3: brew install --HEAD"
+    if cat "${FORMULA}" | docker run --rm -i "${BREW_IMAGE}" bash -c '
+        TAP_DIR="$(brew --repository)/Library/Taps/1121citrus/homebrew-usb-explore/Formula"
+        mkdir -p "${TAP_DIR}"
+
+        # Adapt formula for Linux: remove :macos constraint and
+        # tarball fields so --HEAD (git clone) is used.
+        sed -e "/depends_on :macos/d" \
+            -e "/^  url /d" \
+            -e "/^  sha256 /d" \
+            > "${TAP_DIR}/usb-explore.rb"
+
+        export HOMEBREW_NO_AUTO_UPDATE=1
+        export HOMEBREW_NO_ENV_HINTS=1
+
+        brew install --HEAD 1121citrus/usb-explore/usb-explore 2>&1
+
+        echo "--- post-install verification ---"
+
+        INSTALLED="$(brew --prefix)/bin/usb-explore"
+
+        # Check the binary exists and is executable
+        if [[ ! -x "${INSTALLED}" ]]; then
+            echo "FAIL: usb-explore not found or not executable" >&2
+            exit 1
+        fi
+
+        # Use /bin/bash explicitly: the Homebrew-installed bash may
+        # have glibc mismatches on arm64 Linux (Tier 2 platform).
+        # The script itself only needs bash 4+; system bash suffices
+        # for these checks.
+        version_out=$(/bin/bash "${INSTALLED}" --version 2>&1)
+        if [[ "${version_out}" == *"usb-explore"* ]]; then
+            echo "PASS: --version output: ${version_out}"
+        else
+            echo "FAIL: --version output missing usb-explore: ${version_out}" >&2
+            exit 1
+        fi
+
+        help_out=$(/bin/bash "${INSTALLED}" --help 2>&1)
+        if [[ "${help_out}" == *"--image"* && "${help_out}" == *"--partition"* ]]; then
+            echo "PASS: --help contains expected flags"
+        else
+            echo "FAIL: --help output missing expected flags" >&2
+            exit 1
+        fi
+    '; then
+        pass "brew install --HEAD + verification"
+    else
+        fail "brew install --HEAD + verification"
+        (( failures++ ))
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+echo "" >&2
+if [[ "${failures}" -eq 0 ]]; then
+    log "All tests passed"
+    exit 0
+else
+    log "${failures} test(s) failed"
+    exit 1
+fi
