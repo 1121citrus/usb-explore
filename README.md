@@ -44,17 +44,31 @@ handles that part.
 
 ## Quick start
 
-```bash
-# Install the wrapper script somewhere on your PATH
-curl -o /usr/local/bin/usb-explore \
-    https://raw.githubusercontent.com/1121citrus/usb-explore/main/src/usb-explore
-chmod +x /usr/local/bin/usb-explore
+### Install
 
-# Or, if you have the repository cloned:
+Pick one method:
+
+```bash
+# Option 1: install script (from a clone)
+./bin/install
+
+# Option 2: install script (standalone download)
+curl -fsSL https://raw.githubusercontent.com/1121citrus/usb-explore/main/bin/install | bash
+
+# Option 3: Homebrew
+brew install --formula ./install/homebrew/Formula/usb-explore.rb
+
+# Option 4: manual — just add src/ to your PATH
 export PATH="$PWD/src:$PATH"
 ```
 
-Then, with a USB drive plugged in:
+`bin/install` copies `src/usb-explore` to `/usr/local/bin` by default.
+Pass `--prefix ~/.local` to install elsewhere. Run `bin/install --help`
+for all options.
+
+### Use
+
+With a USB drive plugged in:
 
 ```bash
 # 1. Find your USB drive
