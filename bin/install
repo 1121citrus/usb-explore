@@ -1,0 +1,266 @@
+#!/usr/bin/env bash
+
+# install — install or uninstall usb-explore on macOS.
+#
+# Copyright (C) 2026 1121 Citrus
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# SYNOPSIS
+#   install [--prefix DIR] [--pull] [--uninstall] [--dry-run] [--help]
+#
+# DESCRIPTION
+#   Copies the usb-explore wrapper script to PREFIX/bin (default:
+#   /usr/local) and optionally pre-pulls the Docker image so the first
+#   run is fast. Works from a repository clone or as a standalone
+#   download.
+#
+#   When run from a clone, the script is copied from src/usb-explore.
+#   When downloaded standalone (no src/ directory), the script is
+#   fetched from GitHub.
+#
+# OPTIONS
+#   --prefix DIR   Installation prefix (default: /usr/local).
+#                  The script is placed at DIR/bin/usb-explore.
+#   --pull         Pre-pull the Docker image after installing.
+#   --uninstall    Remove usb-explore from PREFIX/bin and exit.
+#   --dry-run      Print what would be done without making changes.
+#   --help         Print this help and exit.
+#
+# EXAMPLES
+#   # Install from a clone
+#   ./bin/install
+#
+#   # Install to a custom prefix
+#   ./bin/install --prefix ~/.local
+#
+#   # Install and pre-pull the Docker image
+#   ./bin/install --pull
+#
+#   # Curl-pipe install from GitHub
+#   curl -fsSL https://raw.githubusercontent.com/1121citrus/usb-explore/main/bin/install | bash
+#
+#   # Uninstall
+#   ./bin/install --uninstall
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+PREFIX="/usr/local"
+PULL=false
+UNINSTALL=false
+DRY_RUN=false
+
+GITHUB_RAW="https://raw.githubusercontent.com/1121citrus/usb-explore"
+GITHUB_BRANCH="main"
+REGISTRY="1121citrus"
+IMAGE_NAME="usb-explore"
+IMAGE_TAG="latest"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+log()  { printf "install: %s\n" "$*" >&2; }
+err()  { printf "install: error: %s\n" "$*" >&2; }
+die()  { err "$*"; exit 1; }
+
+# run_cmd — execute a command, or print it under --dry-run.
+# Args: command and arguments
+# Returns: command exit code, or 0 under --dry-run
+run_cmd() {
+    if [[ "${DRY_RUN}" == true ]]; then
+        printf "[dry-run] %s\n" "$*" >&2
+        return 0
+    fi
+    "$@"
+}
+
+# require_cmd — exit with a clear message when a required command is missing.
+# Args: $1 = command name
+# Returns: 0 if command exists; exits 1 otherwise
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 \
+        || die "Required command not found: $1"
+}
+
+# ---------------------------------------------------------------------------
+# Core operations
+# ---------------------------------------------------------------------------
+
+# resolve_source — locate the usb-explore script, printing its path to stdout.
+# Checks the local repository first, then falls back to a temporary download.
+# Args: none
+# Returns: 0 with path on stdout; exits on failure
+resolve_source() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local repo_root
+    repo_root="$(cd "${script_dir}/.." 2>/dev/null && pwd || echo "")"
+
+    if [[ -n "${repo_root}" && -f "${repo_root}/src/usb-explore" ]]; then
+        echo "${repo_root}/src/usb-explore"
+        return 0
+    fi
+
+    require_cmd curl
+    local tmp
+    tmp=$(mktemp /tmp/usb-explore-download-XXXXXX)
+    log "Downloading usb-explore from GitHub..."
+    if ! curl --fail --silent --show-error --location \
+            "${GITHUB_RAW}/${GITHUB_BRANCH}/src/usb-explore" \
+            --output "${tmp}"; then
+        rm -f "${tmp}"
+        die "Download failed"
+    fi
+
+    if [[ ! -s "${tmp}" ]]; then
+        rm -f "${tmp}"
+        die "Downloaded file is empty"
+    fi
+
+    echo "${tmp}"
+}
+
+# do_install — copy the script to PREFIX/bin and set permissions.
+# Args: none (reads PREFIX, PULL, DRY_RUN globals)
+# Returns: 0 on success
+do_install() {
+    local dest="${PREFIX}/bin/usb-explore"
+    local dest_dir="${PREFIX}/bin"
+    local source
+    source=$(resolve_source)
+    local is_temp=false
+
+    if [[ "${source}" == /tmp/* ]]; then
+        is_temp=true
+    fi
+
+    if [[ ! -d "${dest_dir}" ]]; then
+        log "Creating ${dest_dir}..."
+        run_cmd mkdir -p "${dest_dir}" \
+            || die "Cannot create ${dest_dir} (try: sudo ./bin/install)"
+    fi
+
+    if [[ -f "${dest}" ]]; then
+        log "Replacing existing ${dest}"
+    fi
+
+    log "Installing to ${dest}"
+    if [[ "${DRY_RUN}" == false ]]; then
+        install -m 0755 "${source}" "${dest}" 2>/dev/null \
+            || { run_cmd sudo install -m 0755 "${source}" "${dest}" \
+                 || die "Cannot write to ${dest} (check permissions)"; }
+    else
+        run_cmd install -m 0755 "${source}" "${dest}"
+    fi
+
+    if [[ "${is_temp}" == true ]]; then
+        rm -f "${source}"
+    fi
+
+    log "Installed usb-explore to ${dest}"
+
+    if [[ "${PULL}" == true ]]; then
+        do_pull
+    fi
+
+    do_verify "${dest}"
+}
+
+# do_pull — pre-pull the Docker image.
+# Args: none
+# Returns: 0 on success
+do_pull() {
+    local image_ref="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+    log "Pulling Docker image ${image_ref}..."
+    run_cmd docker pull "${image_ref}"
+}
+
+# do_verify — run basic post-install checks.
+# Args: $1 = installed script path
+# Returns: 0 on success; prints warnings on failure
+do_verify() {
+    local dest="$1"
+
+    if [[ "${DRY_RUN}" == true ]]; then
+        return 0
+    fi
+
+    if [[ ! -x "${dest}" ]]; then
+        err "${dest} is not executable"
+        return 1
+    fi
+
+    if command -v usb-explore >/dev/null 2>&1; then
+        local installed_path
+        installed_path=$(command -v usb-explore)
+        if [[ "${installed_path}" != "${dest}" ]]; then
+            log "Warning: another usb-explore found at ${installed_path}"
+            log "  The installed copy at ${dest} may be shadowed"
+        fi
+        log "Verification: usb-explore is on PATH"
+    else
+        log "Warning: ${dest} is not on PATH"
+        log "  Add this to your shell profile:"
+        log "    export PATH=\"${PREFIX}/bin:\${PATH}\""
+    fi
+}
+
+# do_uninstall — remove the installed script.
+# Args: none (reads PREFIX, DRY_RUN globals)
+# Returns: 0 on success
+do_uninstall() {
+    local dest="${PREFIX}/bin/usb-explore"
+
+    if [[ ! -f "${dest}" ]]; then
+        log "Not installed at ${dest} -- nothing to remove"
+        return 0
+    fi
+
+    log "Removing ${dest}"
+    if [[ "${DRY_RUN}" == false ]]; then
+        rm -f "${dest}" 2>/dev/null \
+            || sudo rm -f "${dest}" \
+            || die "Cannot remove ${dest} (check permissions)"
+    else
+        run_cmd rm -f "${dest}"
+    fi
+
+    log "Uninstalled usb-explore from ${dest}"
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+usage() {
+    awk '/^# SYNOPSIS/{f=1;next} /^#$/{if(f)exit} f{sub(/^# ?/,""); print}' \
+        "${BASH_SOURCE[0]}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --prefix)
+            [[ -n "${2:-}" ]] || die "--prefix requires a directory"
+            PREFIX="$2"; shift ;;
+        --pull)      PULL=true ;;
+        --uninstall) UNINSTALL=true ;;
+        --dry-run)   DRY_RUN=true ;;
+        --help|-h)   usage; exit 0 ;;
+        *)           die "Unknown option: $1" ;;
+    esac
+    shift
+done
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+if [[ "${UNINSTALL}" == true ]]; then
+    do_uninstall
+else
+    do_install
+fi
