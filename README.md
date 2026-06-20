@@ -105,11 +105,39 @@ unplug the USB drive after step 2.
 | Requirement | How to get it |
 | --- | --- |
 | macOS 13 (Ventura) or later | System update |
-| Docker Desktop | [docker.com](https://www.docker.com/products/docker-desktop/) |
+| Docker-compatible runtime | See [container runtime options](#container-runtime-options) below |
 | `dd` and `diskutil` | Included in macOS |
 
 No Homebrew packages required. The Docker image is pulled automatically
 on first use.
+
+### Container runtime options
+
+Any Docker-compatible runtime that supports `--privileged` containers
+works. The container needs real root inside the VM for `losetup` and
+`mount`.
+
+| Runtime | Status | Notes |
+| --- | --- | --- |
+| [Docker Desktop](https://www.docker.com/products/docker-desktop/) | **Tested in CI** | Primary development and CI runtime |
+| [OrbStack](https://orbstack.dev/) | Verified compatible | Drop-in Docker Desktop replacement; no code changes needed |
+| [Colima](https://github.com/abiosoft/colima) | Verified compatible | Use dockerd mode (default). Multi-platform `buildx` push requires QEMU binfmt registration |
+| [Rancher Desktop](https://rancherdesktop.io/) | Verified compatible | Must use dockerd mode, not containerd mode |
+| Podman Desktop | Not supported | Requires rootful mode; no `buildx`; ~50 call sites would need abstraction |
+| Rootless Docker | Not compatible | `losetup` and `mount` require real `CAP_SYS_ADMIN`; rootless cannot provide it |
+
+To verify your runtime, run the compatibility test:
+
+```bash
+# Quick subset — exercises --privileged, losetup, bind mounts (~2 min)
+./test/runtime-compat --quick
+
+# Full test suite (~5 min)
+./test/runtime-compat
+```
+
+The script detects the active runtime, runs the test suite, and prints
+a JSON summary with the result.
 
 ---
 
