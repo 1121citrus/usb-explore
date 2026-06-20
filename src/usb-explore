@@ -65,9 +65,13 @@
 #             prefixed with /mnt/part.
 #
 #   serve   [-i|--image PATH] [-p|--partition N] [--port PORT]
+#             [--no-open]
 #             Start a read-only HTTP file server on the host at
 #             http://localhost:PORT (default 8080), browseable in any
 #             web browser. Press Ctrl-C to stop.
+#             --no-open suppresses the automatic browser launch.
+#             The browser is also suppressed automatically in SSH
+#             sessions and headless environments.
 #
 #   shell   [-i|--image PATH] [-p|--partition N]
 #             Start an interactive bash shell with a partition mounted
@@ -883,11 +887,13 @@ do_run() {
 
 # do_serve — start a read-only HTTP directory server over the mounted partition.
 # Args:
-#   [--port PORT]  host port to listen on (default: 8080)
+#   [--port PORT]    host port to listen on (default: 8080)
+#   [--no-open]      suppress automatic browser launch
 # Returns:
 #   Runs until interrupted; exit code reflects container exit code.
 do_serve() {
     local port=8080
+    local no_open=false
     while [[ $# -gt 0 ]]; do
         case "${1}" in
             -p|--partition)
@@ -896,6 +902,7 @@ do_serve() {
             --port)
                 [[ -n "${2:-}" ]] || die "--port requires a number"
                 port="${2}"; shift ;;
+            --no-open) no_open=true ;;
             -*) die "Unknown serve option: ${1}" ;;
         esac
         shift
@@ -913,8 +920,12 @@ do_serve() {
     log "Serving partition ${PARTITION} at http://localhost:${port}/"
     log "Press Ctrl-C to stop."
 
-    # Open the browser on macOS after a short delay to let the server start.
-    if command -v open >/dev/null 2>&1; then
+    # Auto-suppress browser launch in SSH sessions and headless environments.
+    if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" ]]; then
+        no_open=true
+    fi
+
+    if [[ "${no_open}" == false ]] && command -v open >/dev/null 2>&1; then
         ( sleep 1 && open "http://localhost:${port}/" ) &
     fi
 

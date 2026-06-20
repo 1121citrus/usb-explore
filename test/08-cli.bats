@@ -202,6 +202,16 @@ DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
     [[ "${output}" == *"65535"* ]]
 }
 
+@test "cli: 'serve' --no-open flag is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img serve --no-open
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'serve' --no-open combined with --port is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img serve --port 9090 --no-open
+    [ "${status}" -ne 2 ]
+}
+
 @test "cli: 'shell' subcommand is routed (not a usage error)" {
     run bash "${SCRIPT}" --image /nonexistent.img shell
     [ "${status}" -ne 2 ]
@@ -485,4 +495,41 @@ EOF
 
 @test "clean: rm uses -f to skip write-protected prompt after confirmation" {
     grep -q 'rm -f' "${SCRIPT}"
+}
+
+# ---------------------------------------------------------------------------
+# Static-analysis — serve: --no-open flag and SSH auto-suppression
+#
+# In headless or SSH sessions, 'open http://...' fails or produces a
+# confusing error. The fix adds --no-open to suppress the browser launch
+# explicitly, and auto-detects SSH sessions via SSH_CONNECTION/SSH_TTY.
+# ---------------------------------------------------------------------------
+
+@test "serve: do_serve checks no_open before calling open" {
+    grep -q 'no_open.*false.*&&.*open' "${SCRIPT}"
+}
+
+@test "serve: do_serve auto-suppresses open in SSH sessions" {
+    grep -q 'SSH_CONNECTION' "${SCRIPT}"
+    grep -q 'SSH_TTY' "${SCRIPT}"
+}
+
+@test "serve: --no-open suppresses browser launch via docker stub" {
+    local tmp stub
+    tmp=$(mktemp /tmp/usb-serve-test-XXXXXX)
+    stub=$(_make_docker_stub 130)
+    run env PATH="${stub}:${PATH}" \
+        bash "${SCRIPT}" --image "${tmp}" -p 1 serve --no-open
+    rm -f "${tmp}"; rm -rf "${stub}"
+    [ "${status}" -eq 0 ]
+}
+
+@test "serve: SSH_CONNECTION auto-suppresses browser launch via docker stub" {
+    local tmp stub
+    tmp=$(mktemp /tmp/usb-serve-test-XXXXXX)
+    stub=$(_make_docker_stub 130)
+    run env PATH="${stub}:${PATH}" SSH_CONNECTION="1.2.3.4 5678 5.6.7.8 22" \
+        bash "${SCRIPT}" --image "${tmp}" -p 1 serve
+    rm -f "${tmp}"; rm -rf "${stub}"
+    [ "${status}" -eq 0 ]
 }

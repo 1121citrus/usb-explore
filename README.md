@@ -416,7 +416,7 @@ usb-explore run -- cat /etc/os-release | grep VERSION
 #### `serve` — browse the partition over HTTP
 
 ```text
-usb-explore serve [-i usb.img] [-p N] [--port PORT]
+usb-explore serve [-i usb.img] [-p N] [--port PORT] [--no-open]
 ```
 
 Starts a read-only HTTP file server on your Mac. Open the printed URL in
@@ -426,6 +426,7 @@ individual files. Press Ctrl-C to stop the server.
 | Option | Default | Description |
 | --- | --- | --- |
 | `--port PORT` | 8080 | Host port for the HTTP server |
+| `--no-open` | off | Suppress automatic browser launch |
 
 ```bash
 # Start on the default port 8080
@@ -435,10 +436,16 @@ usb-explore serve
 
 # Use a different port
 usb-explore serve --port 9090
+
+# Suppress automatic browser launch (e.g. in an SSH session)
+usb-explore serve --no-open
 ```
 
-The browser opens automatically on macOS. The partition is served
-read-only; no files can be modified or uploaded.
+The browser opens automatically on macOS when a local display is
+available. It is suppressed automatically in SSH sessions
+(`SSH_CONNECTION` or `SSH_TTY` set) and can be suppressed explicitly
+with `--no-open`. The partition is served read-only; no files can be
+modified or uploaded.
 
 ---
 
