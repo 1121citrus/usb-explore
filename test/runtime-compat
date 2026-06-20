@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+
+# runtime-compat — run the test suite and record which container runtime
+# was used.
+#
+# Copyright (C) 2026 1121 Citrus
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# SYNOPSIS
+#   runtime-compat [--quick] [--help]
+#
+# DESCRIPTION
+#   Detects the active container runtime, runs the BATS test suite, and
+#   reports the runtime alongside the test result. The output is a
+#   machine-readable summary suitable for recording which runtimes have
+#   been verified.
+#
+#   This script does not install or switch runtimes. Run it once per
+#   runtime you want to verify: start the runtime, then run this script.
+#
+# OPTIONS
+#   --quick    Run only the tests that exercise --privileged, losetup,
+#              and bind mounts (tests 03-06). Skips lint, build, scan.
+#   --help     Print this help and exit.
+#
+# EXAMPLES
+#   # Full suite against whatever runtime is active
+#   ./test/runtime-compat
+#
+#   # Quick subset (partition + subcommand tests only)
+#   ./test/runtime-compat --quick
+#
+# OUTPUT
+#   On completion, prints a one-line JSON summary to stdout:
+#     {"runtime":"Docker Desktop","version":"29.5.3","os":"Docker Desktop",
+#      "tests":"passed","exit_code":0,"timestamp":"2026-06-20T12:00:00Z"}
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+QUICK=false
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+log()  { printf "runtime-compat: %s\n" "$*" >&2; }
+err()  { printf "runtime-compat: error: %s\n" "$*" >&2; }
+die()  { err "$*"; exit 1; }
+
+timestamp_utc() {
+    date -u +%Y-%m-%dT%H:%M:%SZ
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --quick) QUICK=true ;;
+        --help|-h)
+            awk '/^# SYNOPSIS/{f=1;next} /^#$/{if(f)exit} f{sub(/^# ?/,""); print}' \
+                "${BASH_SOURCE[0]}"
+            exit 0 ;;
+        *) die "Unknown option: $1" ;;
+    esac
+    shift
+done
+
+# ---------------------------------------------------------------------------
+# Runtime detection
+# ---------------------------------------------------------------------------
+
+if ! docker info >/dev/null 2>&1; then
+    die "No container runtime detected (docker info failed)"
+fi
+
+RUNTIME_NAME=$(docker info --format '{{.Name}}' 2>/dev/null || echo "unknown")
+RUNTIME_VERSION=$(docker info --format '{{.ServerVersion}}' 2>/dev/null || echo "unknown")
+RUNTIME_OS=$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || echo "unknown")
+
+log "Runtime detected:"
+log "  Name:    ${RUNTIME_NAME}"
+log "  Version: ${RUNTIME_VERSION}"
+log "  OS:      ${RUNTIME_OS}"
+log ""
+
+# ---------------------------------------------------------------------------
+# Build the image (needed for tests 03-06)
+# ---------------------------------------------------------------------------
+
+log "Building image..."
+(cd "${REPO_ROOT}" && ./build --no-lint --no-test --no-scan) >&2
+
+IMAGE_TAG=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+IMAGE="1121citrus/usb-explore:dev-${IMAGE_TAG}"
+
+# ---------------------------------------------------------------------------
+# Run tests
+# ---------------------------------------------------------------------------
+
+rc=0
+
+if [[ "${QUICK}" == true ]]; then
+    log "Running quick subset (tests 03-06)..."
+    (cd "${REPO_ROOT}" && docker run --rm --interactive \
+        -v "${PWD}:${PWD}" \
+        -v /tmp:/tmp \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        -e "IMAGE=${IMAGE}" \
+        --workdir "${PWD}" \
+        --entrypoint sh \
+        "bats/bats:1.13.0" \
+        -c "apk add --quiet --no-cache docker-cli >/dev/null 2>&1 \
+            && bats \
+                test/03-invocation.bats \
+                test/04-env-metadata.bats \
+                test/05-partition-discovery.bats \
+                test/06-subcommands.bats"
+    ) >&2 || rc=$?
+else
+    log "Running full test suite..."
+    (cd "${REPO_ROOT}" && IMAGE="${IMAGE}" ./test/run-all) >&2 || rc=$?
+fi
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+status="passed"
+[[ "${rc}" -ne 0 ]] && status="failed"
+
+log ""
+log "Result: ${status} (exit ${rc}) on ${RUNTIME_OS} ${RUNTIME_VERSION}"
+
+# Machine-readable summary to stdout
+printf '{"runtime":"%s","version":"%s","os":"%s","tests":"%s","exit_code":%d,"timestamp":"%s"}\n' \
+    "${RUNTIME_NAME}" \
+    "${RUNTIME_VERSION}" \
+    "${RUNTIME_OS}" \
+    "${status}" \
+    "${rc}" \
+    "$(timestamp_utc)"
+
+exit "${rc}"
