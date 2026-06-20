@@ -89,14 +89,21 @@ log "  OS:      ${RUNTIME_OS}"
 log ""
 
 # ---------------------------------------------------------------------------
-# Build the image (needed for tests 03-06)
+# Resolve or build the image (needed for tests 03-06)
 # ---------------------------------------------------------------------------
 
-log "Building image..."
-(cd "${REPO_ROOT}" && ./build --no-lint --no-test --no-scan) >&2
-
-IMAGE_TAG=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-IMAGE="1121citrus/usb-explore:dev-${IMAGE_TAG}"
+if [[ -n "${IMAGE:-}" ]]; then
+    log "Using IMAGE=${IMAGE} from environment"
+elif IMAGE_TAG=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null) \
+     && docker image inspect "1121citrus/usb-explore:dev-${IMAGE_TAG}" >/dev/null 2>&1; then
+    IMAGE="1121citrus/usb-explore:dev-${IMAGE_TAG}"
+    log "Found existing image ${IMAGE}"
+else
+    log "Building image..."
+    (cd "${REPO_ROOT}" && ./build --no-lint --no-test --no-scan) >&2
+    IMAGE_TAG=$(cd "${REPO_ROOT}" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    IMAGE="1121citrus/usb-explore:dev-${IMAGE_TAG}"
+fi
 
 # ---------------------------------------------------------------------------
 # Run tests
