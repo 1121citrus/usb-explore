@@ -137,6 +137,51 @@ run_in_image() {
 # Default CMD
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Storage layer binaries and drivers
+# ---------------------------------------------------------------------------
+
+@test "image: cryptsetup is present" {
+    run run_in_image 'command -v cryptsetup'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: pvscan is present (lvm2)" {
+    run run_in_image 'command -v pvscan'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: dmsetup is present" {
+    run run_in_image 'command -v dmsetup'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: drivers/luks.sh is installed and executable" {
+    run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/luks.sh'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: drivers/lvm.sh is installed and executable" {
+    run run_in_image 'test -x /usr/local/lib/usb-explore/drivers/lvm.sh'
+    [ "${status}" -eq 0 ]
+}
+
+@test "image: storage layer packages add less than 15 MB" {
+    local total_kb
+    total_kb=$(docker run --rm --entrypoint dpkg-query "${IMAGE}" \
+        -W --showformat='${Installed-Size}\n' \
+        cryptsetup-bin libcryptsetup12 \
+        lvm2 liblvm2cmd2.03 \
+        dmeventd dmsetup libdevmapper1.02.1 libdevmapper-event1.02.1 \
+        2>/dev/null | awk '{s+=$1} END{print s}')
+    # 15 MB = 15360 KB; fail if storage packages exceed this budget
+    [[ "${total_kb}" -lt 15360 ]]
+}
+
+# ---------------------------------------------------------------------------
+# Default CMD
+# ---------------------------------------------------------------------------
+
 @test "image: default CMD is 'info'" {
     local cmd
     cmd=$(docker inspect --format '{{json .Config.Cmd}}' "${IMAGE}")
