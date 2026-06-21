@@ -9,7 +9,7 @@
 class UsbExplore < Formula
   desc "Explore Linux USB disk images from macOS via Docker"
   homepage "https://github.com/1121citrus/usb-explore"
-  url "https://github.com/1121citrus/usb-explore/archive/refs/tags/v1.4.0.tar.gz"
+  url "https://github.com/1121citrus/usb-explore/archive/refs/tags/v1.5.0.tar.gz"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
   license "AGPL-3.0-or-later"
   head "https://github.com/1121citrus/usb-explore.git", branch: "main"
