@@ -575,7 +575,6 @@ if [[ "${LINT}" == "true" ]]; then
             /src/src/container/drivers/iso9660.sh \
             /src/src/container/drivers/luks.sh \
             /src/src/container/drivers/lvm.sh \
-            /src/src/container/drivers/mdadm.sh \
             /src/bin/install \
             /src/install/homebrew/test-formula \
             /src/test/runtime-compat)

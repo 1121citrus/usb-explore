@@ -166,8 +166,7 @@ driver pipeline that activates each layer before mounting:
 | Layer | Typical use | Notes |
 | --- | --- | --- |
 | LVM | Enterprise Linux, RHEL default installer | VG activated read-only; `--lv` selects when multiple LVs exist |
-| LUKS | Full-disk encryption (Ubuntu, Fedora) | Requires `--luks-passphrase` or `--luks-key-file` |
-| mdadm RAID-1 | Software mirroring | Single-member only; requires `md_mod` kernel module (not in Docker Desktop) |
+| LUKS | Full-disk encryption (Ubuntu, Fedora) | Requires `--luks-passphrase-file`, `--luks-passphrase`, or `--luks-key-file` |
 
 Layers can stack (e.g. LUKS → LVM → ext4). `info` reports the
 detected storage layer in the Notes column and the `storage_layer`
@@ -330,7 +329,7 @@ The **Notes** column shows:
 
 `--json` emits machine-readable JSON for scripting. Each partition record
 includes `fstype` (`"raw"` when no filesystem is detected), `mountable`,
-`mountable_reason`, `storage_layer` (`"lvm"`, `"luks"`, `"mdadm"`, or
+`mountable_reason`, `storage_layer` (`"lvm"`, `"luks"`, or
 `null`), and — for raw partitions — `raw_hint` (the same content shown
 in the Notes column, or `null` when nothing was found).
 
@@ -593,12 +592,12 @@ usb-explore copy -p 3 /etc ./etc-from-p3
 ```
 
 BIOS Boot, Linux swap, and raw (unrecognised filesystem) partitions are
-excluded from the mountable count. LVM, LUKS, and mdadm partitions are
+excluded from the mountable count. LVM and LUKS partitions are
 mountable — storage layers are activated automatically before mounting.
 
 ### Storage layer options
 
-When a partition uses LVM, LUKS, or mdadm, additional flags may be
+When a partition uses LVM or LUKS, additional flags may be
 needed:
 
 ```bash

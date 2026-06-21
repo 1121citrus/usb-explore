@@ -17,11 +17,11 @@ DRIVER_DIR="/usr/local/lib/usb-explore/drivers"
 for _drv in "${DRIVER_DIR}"/*.sh; do source "${_drv}"; done
 
 # Layer driver registry: each entry transforms a block device into a new
-# block device (e.g. LUKS decrypt, LVM activate, mdadm assemble).
+# block device (e.g. LUKS decrypt, LVM activate).
 # Interface: <name>_detect, <name>_activate, <name>_deactivate.
 # Order matters: LUKS must be tried before LVM because LUKS→LVM is the
 # common stacking pattern.
-LAYER_DRIVERS=(luks lvm mdadm)
+LAYER_DRIVERS=(luks lvm)
 
 # Filesystem driver registry: each entry mounts a block device.
 # Interface: <name>_detect, <name>_mount, <name>_unmount.
@@ -217,7 +217,7 @@ mount_partition() {
     _cleanup_stale_dm
 
     # Layer activation loop: repeatedly probe the current device for
-    # storage abstraction layers (LUKS, LVM, mdadm). Each matched layer
+    # storage abstraction layers (LUKS, LVM). Each matched layer
     # transforms the device into a new one. The loop terminates when no
     # layer driver matches, then filesystem drivers take over.
     local current_device="${PART_LOOP}"

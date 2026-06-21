@@ -52,7 +52,7 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 DEBIAN_FRONTEND=noninteractive apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends \
        gdisk dosfstools e2fsprogs xfsprogs fdisk util-linux parted jq \
-       btrfs-progs cryptsetup-bin erofs-utils lvm2 mdadm \
+       btrfs-progs cryptsetup-bin erofs-utils lvm2 \
        squashfs-tools >/dev/null 2>&1
 
 # LVM inside Docker: no udev, so disable udev sync and create dm nodes
@@ -446,14 +446,6 @@ losetup -d "${LP1}"
 trap - EXIT
 cp "${IMG}" /fixtures/luks.img
 SCRIPT
-
-# ---------------------------------------------------------------------------
-# mdadm.img: SKIPPED
-# Docker Desktop's LinuxKit kernel does not include the md_mod module.
-# mdadm fixture generation and testing require a runtime with md support
-# (e.g. Colima with a full kernel). The mdadm driver code is present and
-# correct but cannot be validated in this environment.
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # luks-lvm.img: GPT, LUKS → LVM → ext4 (common enterprise stacking)

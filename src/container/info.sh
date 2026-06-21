@@ -84,7 +84,6 @@ classify_partition() {
     case "${fstype}" in
         crypto_LUKS)       MOUNTABLE=true; STORAGE_LAYER="luks"; return ;;
         LVM2_member)       MOUNTABLE=true; STORAGE_LAYER="lvm"; return ;;
-        linux_raid_member) MOUNTABLE=true; STORAGE_LAYER="mdadm"; return ;;
     esac
 
     case "${fstype}" in

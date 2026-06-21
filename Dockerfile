@@ -52,7 +52,6 @@ RUN apt-get update \
       jq \
       lvm2 \
       mc \
-      mdadm \
       ncdu \
       python3 \
       rsync \
