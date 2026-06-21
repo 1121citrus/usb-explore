@@ -253,6 +253,7 @@ run_container() {
         --name "${CONTAINER_NAME}"
         -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro"
         -e "USB_PARTITION=${PARTITION:-}"
+        -e "USB_EXPLORE_RUN_SCOPE=${CONTAINER_NAME}"
     )
 
     # Storage layer credentials and selection

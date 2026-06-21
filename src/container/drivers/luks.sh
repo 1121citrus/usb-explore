@@ -4,7 +4,12 @@
 # Detects LUKS-encrypted partitions and opens them read-only using a
 # passphrase from the environment or a key file.
 
-LUKS_DM_NAME="usb-explore-luks"
+# dm mapping name for this invocation scope.
+# Reads USB_EXPLORE_DM_SCOPE_PREFIX from dispatch.sh.
+luks_dm_name() {
+    local scope="${USB_EXPLORE_DM_SCOPE_PREFIX:-usb-explore}"
+    echo "${scope}-luks"
+}
 
 # Detect whether the device contains a LUKS header.
 # Args:   $1 = block device node
@@ -29,6 +34,8 @@ luks_detect() {
 # Returns: 0 on success; exits 5 on error
 luks_activate() {
     local node="${1}"
+    local dm_name
+    dm_name="$(luks_dm_name)"
 
     if [[ -n "${USB_EXPLORE_LUKS_KEY_FILE:-}" ]]; then
         if [[ ! -f "${USB_EXPLORE_LUKS_KEY_FILE}" ]]; then
@@ -38,7 +45,7 @@ luks_activate() {
         fi
         cryptsetup open --readonly \
             --key-file "${USB_EXPLORE_LUKS_KEY_FILE}" \
-            "${node}" "${LUKS_DM_NAME}" || {
+            "${node}" "${dm_name}" || {
             echo "error: failed to open LUKS volume with key file" >&2
             exit 5
         }
@@ -49,7 +56,7 @@ luks_activate() {
             exit 5
         fi
         cryptsetup open --readonly \
-            "${node}" "${LUKS_DM_NAME}" \
+            "${node}" "${dm_name}" \
             < "${USB_EXPLORE_LUKS_PASSPHRASE_FILE}" || {
             echo "error: failed to open LUKS volume (wrong passphrase?)" >&2
             exit 5
@@ -57,14 +64,14 @@ luks_activate() {
     elif [[ -n "${USB_EXPLORE_LUKS_PASSPHRASE:-}" ]]; then
         printf '%s' "${USB_EXPLORE_LUKS_PASSPHRASE}" \
             | cryptsetup open --readonly \
-                "${node}" "${LUKS_DM_NAME}" || {
+                "${node}" "${dm_name}" || {
             echo "error: failed to open LUKS volume (wrong passphrase?)" >&2
             exit 5
         }
     elif [[ -t 0 ]]; then
         echo "LUKS encrypted volume detected." >&2
         echo "Enter passphrase:" >&2
-        cryptsetup open --readonly "${node}" "${LUKS_DM_NAME}" || {
+        cryptsetup open --readonly "${node}" "${dm_name}" || {
             echo "error: failed to open LUKS volume" >&2
             exit 5
         }
@@ -76,12 +83,12 @@ luks_activate() {
         exit 5
     fi
 
-    echo "/dev/mapper/${LUKS_DM_NAME}"
+    echo "/dev/mapper/${dm_name}"
 }
 
 # Close the LUKS mapping.
 # Args: none
 # Returns: 0 (best-effort)
 luks_deactivate() {
-    cryptsetup close "${LUKS_DM_NAME}" 2>/dev/null || true
+    cryptsetup close "$(luks_dm_name)" 2>/dev/null || true
 }

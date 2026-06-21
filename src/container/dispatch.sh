@@ -29,6 +29,17 @@ LAYER_DRIVERS=(luks lvm)
 # partition-level filesystem, so vfat (EFI) is handled first and wins.
 FS_DRIVERS=(ext xfs vfat squashfs btrfs erofs iso9660)
 
+# Normalize an operator-provided run scope into a safe dm-name prefix.
+# This prevents one invocation from cleaning up another invocation's
+# mappings when multiple containers run concurrently.
+RUN_SCOPE="${USB_EXPLORE_RUN_SCOPE:-usb-explore-$$}"
+RUN_SCOPE="${RUN_SCOPE//[^[:alnum:]_.-]/-}"
+while [[ "${RUN_SCOPE}" == -* ]]; do RUN_SCOPE="${RUN_SCOPE#-}"; done
+while [[ "${RUN_SCOPE}" == *- ]]; do RUN_SCOPE="${RUN_SCOPE%-}"; done
+[[ -n "${RUN_SCOPE}" ]] || RUN_SCOPE="usb-explore-$$"
+USB_EXPLORE_DM_SCOPE_PREFIX="${RUN_SCOPE:0:48}"
+export USB_EXPLORE_DM_SCOPE_PREFIX
+
 # ---------------------------------------------------------------------------
 # Loop device and layer tracking
 # ---------------------------------------------------------------------------
@@ -59,47 +70,17 @@ trap cleanup EXIT INT TERM
 # Stale device-mapper cleanup
 # ---------------------------------------------------------------------------
 
-# _cleanup_stale_dm — remove only usb-explore's own orphaned dm mappings.
-# Removes in dependency order: LVM LVs built on usb-explore-luks first,
-# then the LUKS mapping itself. Scoped by the fixed LUKS dm name and
-# any VG names whose PVs reference usb-explore-luks.
+# _cleanup_stale_dm — remove stale dm mappings from this run scope only.
+# Never touches mappings outside USB_EXPLORE_DM_SCOPE_PREFIX.
 # Args: none
 # Returns: 0 (best-effort, never fails the caller)
 _cleanup_stale_dm() {
-    # Remove LVM LVs that depend on the usb-explore LUKS mapping.
-    # These must be removed before the LUKS mapping can be closed.
-    local _dm_name _holders
-    if dmsetup info usb-explore-luks >/dev/null 2>&1; then
-        # Find dm devices held by usb-explore-luks (LVM LVs on top)
-        local _luks_minor
-        _luks_minor=$(dmsetup info -c --noheadings -o minor usb-explore-luks 2>/dev/null || true)
-        if [[ -n "${_luks_minor}" && -d "/sys/block/dm-${_luks_minor}/holders" ]]; then
-            for _holder in /sys/block/dm-"${_luks_minor}"/holders/dm-*; do
-                [[ -e "${_holder}" ]] || continue
-                _dm_name=$(cat "${_holder}/dm/name" 2>/dev/null || true)
-                [[ -n "${_dm_name}" ]] && \
-                    dmsetup remove --force "${_dm_name}" 2>/dev/null || true
-            done
-        fi
-        cryptsetup close usb-explore-luks 2>/dev/null \
-            || dmsetup remove --force usb-explore-luks 2>/dev/null || true
-    fi
-
-    # Remove any stale LVM VGs activated by usb-explore on loop devices
-    # associated with /disk.img (covers LVM-without-LUKS case).
-    local _loop_devs _vg
-    _loop_devs=$(losetup --associated /disk.img --noheadings 2>/dev/null \
-                 | awk -F: '{print $1}') || true
-    for _ld in ${_loop_devs}; do
-        _vg=$(pvs --noheadings -o vg_name "${_ld}" 2>/dev/null | tr -d ' ') || true
-        if [[ -n "${_vg}" ]]; then
-            vgchange --activate n "${_vg}" 2>/dev/null || true
-            while IFS= read -r _dm_name; do
-                [[ -n "${_dm_name}" ]] && \
-                    dmsetup remove --force "${_dm_name}" 2>/dev/null || true
-            done < <(dmsetup ls 2>/dev/null | grep "^${_vg}-" | awk '{print $1}')
-        fi
-    done
+    local _dm_name
+    while IFS= read -r _dm_name; do
+        [[ -n "${_dm_name}" ]] || continue
+        [[ "${_dm_name}" == "${USB_EXPLORE_DM_SCOPE_PREFIX}"-* ]] || continue
+        dmsetup remove --force "${_dm_name}" 2>/dev/null || true
+    done < <(dmsetup ls 2>/dev/null | awk '{print $1}')
 }
 
 # ---------------------------------------------------------------------------
@@ -208,12 +189,7 @@ mount_partition() {
 
     attach_partition "${USB_PARTITION:?USB_PARTITION is not set}"
 
-    # Clear orphaned usb-explore device-mapper entries from prior runs.
-    # Docker Desktop shares the kernel dm table across containers; stale
-    # LUKS/LVM mappings whose backing loop devices no longer exist block
-    # re-activation with "Device already exists".
-    # Only remove usb-explore's own mappings — other containers may have
-    # legitimate dm state.
+    # Clear orphaned dm mappings from this invocation scope only.
     _cleanup_stale_dm
 
     # Layer activation loop: repeatedly probe the current device for

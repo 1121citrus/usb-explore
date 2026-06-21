@@ -9,6 +9,7 @@
 bats_require_minimum_version 1.5.0
 SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
+LUKS_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/luks.sh"
 
 # ---------------------------------------------------------------------------
 # --help / -h
@@ -600,4 +601,17 @@ EOF
 
 @test "dm cleanup: dispatch.sh uses _cleanup_stale_dm for scoped cleanup" {
     grep -q '_cleanup_stale_dm' "${DISPATCH}"
+}
+
+@test "dm cleanup: host passes USB_EXPLORE_RUN_SCOPE to container" {
+    grep -q 'USB_EXPLORE_RUN_SCOPE=${CONTAINER_NAME}' "${SCRIPT}"
+}
+
+@test "dm cleanup: dispatch.sh scopes cleanup by run prefix" {
+    grep -q 'USB_EXPLORE_DM_SCOPE_PREFIX' "${DISPATCH}"
+}
+
+@test "dm cleanup: luks driver does not use fixed mapper name" {
+    grep -q 'luks_dm_name' "${LUKS_DRIVER}"
+    run ! grep -q 'usb-explore-luks' "${LUKS_DRIVER}"
 }
