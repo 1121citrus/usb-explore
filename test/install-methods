@@ -1,0 +1,342 @@
+#!/usr/bin/env bash
+# install-methods — validate every README installation path end-to-end.
+#
+# Copyright (C) 2026 1121 Citrus
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# SYNOPSIS
+#   install-methods [--method METHOD] [--help]
+#
+# DESCRIPTION
+#   Simulates what a developer without access to the private 1121-citrus
+#   repo would experience when installing and building usb-explore.
+#   Each method installs into an isolated temporary directory with a
+#   clean PATH (no 1121-citrus.main/bin).
+#
+#   This script is NOT part of the normal test suite.  Run it manually
+#   to verify that all documented installation methods work.
+#
+# METHODS
+#   clone-install   Option 1: ./bin/install from a clone
+#   clone-path      Option 4: export PATH="$PWD/src:$PATH"
+#   clone-build     Building from source: ./build --no-scan
+#   homebrew        Option 3: brew install --formula (delegates to
+#                   install/homebrew/test-formula --skip-install)
+#   all             Run every method (default)
+#
+# OPTIONS
+#   --method METHOD  Run a single method instead of all.
+#   --help           Print this help and exit.
+#
+# NOTES
+#   Option 2 (curl-pipe install) is skipped because it downloads from
+#   GitHub main, not the local branch under test.  The bin/install
+#   script's download codepath is tested by clone-install (same logic,
+#   different source resolution).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+METHOD="all"
+PASS_COUNT=0
+FAIL_COUNT=0
+SKIP_COUNT=0
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+log()  { printf "install-methods: %s\n" "$*" >&2; }
+pass() { printf "  \033[32mPASS\033[0m  %s\n" "$*" >&2; PASS_COUNT=$(( PASS_COUNT + 1 )); }
+fail() { printf "  \033[31mFAIL\033[0m  %s\n" "$*" >&2; FAIL_COUNT=$(( FAIL_COUNT + 1 )); }
+skip() { printf "  \033[33mSKIP\033[0m  %s\n" "$*" >&2; SKIP_COUNT=$(( SKIP_COUNT + 1 )); }
+
+# _clean_path — return a PATH with no 1121-citrus.main/bin entries.
+# Keeps /usr/bin, /bin, /usr/sbin, /sbin, Docker CLI paths, and any
+# Homebrew or pkgin bash that provides bash 4+.
+# Args: none
+# Returns: 0; writes cleaned PATH to stdout
+_clean_path() {
+    local IFS=':'
+    local result=()
+    for dir in ${PATH}; do
+        case "${dir}" in
+            */1121-citrus.main/bin) continue ;;
+            */1121-citrus.main/include) continue ;;
+        esac
+        result+=("${dir}")
+    done
+    local out=""
+    for dir in "${result[@]}"; do
+        out="${out:+${out}:}${dir}"
+    done
+    echo "${out}"
+}
+
+# _find_bash4 — locate a bash >= 4.0 binary on the clean PATH.
+# Args: none
+# Returns: 0 with path on stdout; 1 if not found
+_find_bash4() {
+    local clean_path
+    clean_path=$(_clean_path)
+    local IFS=':'
+    for dir in ${clean_path}; do
+        local candidate="${dir}/bash"
+        if [[ -x "${candidate}" ]]; then
+            local ver
+            ver=$("${candidate}" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo 0)
+            if [[ "${ver}" -ge 4 ]]; then
+                echo "${candidate}"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+# _run_isolated — run a command with the clean PATH.
+# Args: command and arguments
+# Returns: command exit code
+_run_isolated() {
+    local clean_path
+    clean_path=$(_clean_path)
+    env PATH="${clean_path}" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Method: clone-install
+# ---------------------------------------------------------------------------
+
+test_clone_install() {
+    log "Method: clone-install (./bin/install --prefix TMPDIR)"
+    local tmp
+    tmp=$(mktemp -d /tmp/usb-install-method-XXXXXX)
+
+    if ! _run_isolated bash "${REPO_ROOT}/bin/install" --prefix "${tmp}" 2>&1; then
+        fail "clone-install: bin/install exited non-zero"
+        rm -rf "${tmp}"
+        return
+    fi
+
+    if [[ ! -x "${tmp}/bin/usb-explore" ]]; then
+        fail "clone-install: usb-explore not installed or not executable"
+        rm -rf "${tmp}"
+        return
+    fi
+
+    local help_out
+    help_out=$(_run_isolated bash "${tmp}/bin/usb-explore" --help 2>&1)
+    if [[ "${help_out}" == *"--image"* && "${help_out}" == *"--partition"* ]]; then
+        pass "clone-install: installed, executable, --help works"
+    else
+        fail "clone-install: --help output missing expected flags"
+    fi
+
+    local version_out
+    version_out=$(_run_isolated bash "${tmp}/bin/usb-explore" --version 2>&1)
+    if [[ "${version_out}" == *"usb-explore"* ]]; then
+        pass "clone-install: --version works"
+    else
+        fail "clone-install: --version output missing usb-explore"
+    fi
+
+    # Verify uninstall
+    if _run_isolated bash "${REPO_ROOT}/bin/install" --prefix "${tmp}" --uninstall 2>&1; then
+        if [[ ! -f "${tmp}/bin/usb-explore" ]]; then
+            pass "clone-install: uninstall removes the script"
+        else
+            fail "clone-install: uninstall did not remove the script"
+        fi
+    else
+        fail "clone-install: uninstall exited non-zero"
+    fi
+
+    rm -rf "${tmp}"
+}
+
+# ---------------------------------------------------------------------------
+# Method: clone-path
+# ---------------------------------------------------------------------------
+
+test_clone_path() {
+    log "Method: clone-path (PATH=\$PWD/src:\$PATH)"
+    local clean_path
+    clean_path=$(_clean_path)
+    local script="${REPO_ROOT}/src/usb-explore"
+
+    local help_out
+    help_out=$(env PATH="${REPO_ROOT}/src:${clean_path}" bash "${script}" --help 2>&1)
+    if [[ "${help_out}" == *"--image"* && "${help_out}" == *"--partition"* ]]; then
+        pass "clone-path: usb-explore --help works"
+    else
+        fail "clone-path: --help output missing expected flags"
+    fi
+
+    local version_out
+    version_out=$(env PATH="${REPO_ROOT}/src:${clean_path}" bash "${script}" --version 2>&1)
+    if [[ "${version_out}" == *"usb-explore"* ]]; then
+        pass "clone-path: --version works"
+    else
+        fail "clone-path: --version output missing usb-explore"
+    fi
+
+    # Verify the script can locate its own repo root (needed for
+    # 'usb-explore build' to find the Dockerfile)
+    local build_dry
+    build_dry=$(env PATH="${REPO_ROOT}/src:${clean_path}" \
+        bash "${script}" build --no-cache 2>&1 || true)
+    # build will fail (no Docker or needs image) but should NOT say
+    # "build script not found"
+    if [[ "${build_dry}" == *"build script not found"* ]]; then
+        fail "clone-path: usb-explore build cannot find build script"
+    else
+        pass "clone-path: usb-explore build locates repo correctly"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Method: clone-build
+# ---------------------------------------------------------------------------
+
+test_clone_build() {
+    log "Method: clone-build (./build --no-scan)"
+
+    # Check bash 4+ is available
+    local bash4
+    if ! bash4=$(_find_bash4); then
+        skip "clone-build: no bash >= 4.0 found outside 1121-citrus.main"
+        return
+    fi
+    log "  Using bash: ${bash4}"
+
+    # Check Docker is available
+    if ! _run_isolated docker info >/dev/null 2>&1; then
+        skip "clone-build: Docker is not running"
+        return
+    fi
+
+    # Dry-run the build to verify it parses correctly
+    local dry_out
+    if dry_out=$(_run_isolated "${bash4}" "${REPO_ROOT}/build" \
+            --no-scan --dry-run 2>&1); then
+        pass "clone-build: build --no-scan --dry-run succeeds"
+    else
+        fail "clone-build: build --no-scan --dry-run failed"
+        printf "%s\n" "${dry_out}" >&2
+        return
+    fi
+
+    # Verify the dry-run output contains expected stages
+    if [[ "${dry_out}" == *"Stage 1"* || "${dry_out}" == *"Stage 2"* ]]; then
+        pass "clone-build: dry-run output contains expected stages"
+    else
+        fail "clone-build: dry-run output missing stages"
+    fi
+
+    # Full build (lint + build + test, no scans)
+    log "  Running full build (this takes a few minutes)..."
+    local build_out
+    if build_out=$(_run_isolated "${bash4}" "${REPO_ROOT}/build" \
+            --no-scan --no-advise 2>&1); then
+        pass "clone-build: full build succeeds"
+    else
+        fail "clone-build: full build failed"
+        echo "${build_out}" | tail -20 >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Method: homebrew
+# ---------------------------------------------------------------------------
+
+test_homebrew() {
+    log "Method: homebrew (brew install --formula)"
+
+    if ! _run_isolated docker info >/dev/null 2>&1; then
+        skip "homebrew: Docker is not running"
+        return
+    fi
+
+    local test_formula="${REPO_ROOT}/install/homebrew/test-formula"
+    if [[ ! -x "${test_formula}" ]]; then
+        fail "homebrew: test-formula script not found or not executable"
+        return
+    fi
+
+    # Run style + audit only (--skip-install avoids the slow brew
+    # install --HEAD cycle; the clone-install method already covers
+    # the install-and-verify flow)
+    local brew_out
+    if brew_out=$(_run_isolated bash "${test_formula}" --skip-install 2>&1); then
+        pass "homebrew: brew style + audit pass"
+    else
+        fail "homebrew: brew style or audit failed"
+        printf "%s\n" "${brew_out}" >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+usage() {
+    awk '/^# SYNOPSIS/{f=1;next} /^#$/{if(f)exit} f{sub(/^# ?/,""); print}' \
+        "${BASH_SOURCE[0]}"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --method)
+            [[ -n "${2:-}" ]] || { log "error: --method requires a value"; exit 1; }
+            METHOD="$2"; shift ;;
+        --help|-h) usage; exit 0 ;;
+        *) log "error: unknown option: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+log "Repository: ${REPO_ROOT}"
+log "Clean PATH check: $(_clean_path | tr ':' '\n' | wc -l | tr -d ' ') directories"
+
+bash4=$(_find_bash4 2>/dev/null || true)
+if [[ -n "${bash4}" ]]; then
+    log "Bash 4+: ${bash4} ($(${bash4} --version | head -1))"
+else
+    log "Bash 4+: not found (clone-build will be skipped)"
+fi
+echo "" >&2
+
+case "${METHOD}" in
+    clone-install) test_clone_install ;;
+    clone-path)    test_clone_path ;;
+    clone-build)   test_clone_build ;;
+    homebrew)      test_homebrew ;;
+    all)
+        test_clone_install
+        echo "" >&2
+        test_clone_path
+        echo "" >&2
+        test_clone_build
+        echo "" >&2
+        test_homebrew
+        ;;
+    *) log "error: unknown method: ${METHOD}"; exit 1 ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+echo "" >&2
+log "Results: ${PASS_COUNT} passed, ${FAIL_COUNT} failed, ${SKIP_COUNT} skipped"
+
+if [[ "${FAIL_COUNT}" -gt 0 ]]; then
+    exit 1
+fi
+exit 0
