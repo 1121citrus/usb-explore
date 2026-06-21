@@ -61,11 +61,9 @@ RUN apt-get update \
       xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
-COPY src/container/ /usr/local/lib/usb-explore/
+RUN mkdir -p /mnt/part /out /ref
 
-RUN chmod +x /usr/local/lib/usb-explore/*.sh \
-          /usr/local/lib/usb-explore/drivers/*.sh \
- && mkdir -p /mnt/part /out /ref
+COPY --chmod=755 src/container/ /usr/local/lib/usb-explore/
 
 # Runs as root: losetup and mount require CAP_SYS_ADMIN.
 # See SECURITY.md for the full explanation.

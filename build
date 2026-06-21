@@ -87,6 +87,7 @@
 #   4c. Scan      — Docker Scout CVE scan (gating)
 #   5.  Advise    — advisory scans (never block the build)
 #              a) Dive       — image layer analysis
+#              b) Coverage   — kcov line-coverage report
 #              f) Metrics    — scc code-metrics summary
 #              g) Security   — graudit pattern scan
 #   6.  Push      — multi-platform rebuild + push (only with --push)
@@ -138,6 +139,7 @@ SCAN_SCOUT=${BUILD_SCAN_SCOUT:-true}
 ADVISE_DIVE=false
 ADVISE_METRICS=false
 ADVISE_SECURITY=false
+ADVISE_COVERAGE=false
 _ADVISE_EXPLICIT=false   # set true when --advise or --no-advise is passed
 CACHE_RESET_TRIVY=false
 CACHE_RESET_GRYPE=false
@@ -162,6 +164,8 @@ VERSION=${BUILD_VERSION:-}
 IMAGE_NAME=usb-explore
 
 # Tool image references — edit these variables to update tool versions.
+BATS_KCOV_IMAGE=1121citrus/bats-kcov
+BATS_KCOV_TAG=latest
 DIVE_DOCKER_CLIENT_API=1.47
 DIVE_IMAGE=wagoodman/dive
 DIVE_TAG=v0.13.1
@@ -426,11 +430,13 @@ while [[ $# -gt 0 ]]; do
             ADVISE_DIVE=false
             ADVISE_METRICS=false
             ADVISE_SECURITY=false
+            ADVISE_COVERAGE=false
             IFS=',' read -ra adv_list <<< "$advisements"
             for adv in "${adv_list[@]}"; do
                 adv="${adv//[[:space:]]/}"
                 adv="${adv,,}"
                 case "$adv" in
+                    coverage) ADVISE_COVERAGE=true ;;
                     dive)     ADVISE_DIVE=true ;;
                     metrics)  ADVISE_METRICS=true ;;
                     security) ADVISE_SECURITY=true ;;
@@ -438,11 +444,13 @@ while [[ $# -gt 0 ]]; do
                         ADVISE_DIVE=true
                         ADVISE_METRICS=true
                         ADVISE_SECURITY=true
+                        ADVISE_COVERAGE=true
                         ;;
                     none)
                         ADVISE_DIVE=false
                         ADVISE_METRICS=false
                         ADVISE_SECURITY=false
+                        ADVISE_COVERAGE=false
                         ;;
                     *)  echo "Unknown advisement: $adv" >&2; exit 1 ;;
                 esac
@@ -452,6 +460,7 @@ while [[ $# -gt 0 ]]; do
             ADVISE_DIVE=false
             ADVISE_METRICS=false
             ADVISE_SECURITY=false
+            ADVISE_COVERAGE=false
             _ADVISE_EXPLICIT=true
             ;;
         --cache)
@@ -481,6 +490,7 @@ if [[ "${SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
     ADVISE_DIVE=false
     ADVISE_METRICS=false
     ADVISE_SECURITY=false
+    ADVISE_COVERAGE=false
 fi
 
 # ---------------------------------------------------------------------------
@@ -569,12 +579,15 @@ if [[ "${LINT}" == "true" ]]; then
             /src/src/container/entrypoint.sh \
             /src/src/container/info.sh \
             /src/src/container/dispatch.sh \
+            /src/src/container/drivers/btrfs.sh \
+            /src/src/container/drivers/erofs.sh \
             /src/src/container/drivers/ext.sh \
-            /src/src/container/drivers/xfs.sh \
-            /src/src/container/drivers/vfat.sh \
             /src/src/container/drivers/iso9660.sh \
             /src/src/container/drivers/luks.sh \
             /src/src/container/drivers/lvm.sh \
+            /src/src/container/drivers/squashfs.sh \
+            /src/src/container/drivers/vfat.sh \
+            /src/src/container/drivers/xfs.sh \
             /src/bin/install \
             /src/install/homebrew/test-formula \
             /src/test/runtime-compat)
@@ -644,7 +657,9 @@ if [[ "${TEST}" == "true" ]]; then
                 test/05-partition-discovery.bats \
                 test/06-subcommands.bats \
                 test/07-capture.bats \
-                test/08-cli.bats"
+                test/08-cli.bats \
+                test/09-install.bats \
+                test/10-runtime-compat.bats"
     fi
     write_build_report
 fi
@@ -836,6 +851,41 @@ if [[ "${ADVISE_DIVE}" == "true" ]]; then
                 --ci \
                 --ci-config /.dive-ci \
                 "${full_image}:${VERSION}" || true
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 5d: Coverage (kcov — advisory, never blocks)
+#
+# Reruns the bats suite through kcov to produce a per-file line-coverage
+# report for src/.  Uses 1121citrus/bats-kcov (kcov + bats + jq pre-bundled).
+# Requires SYS_PTRACE; works on macOS Docker Desktop with the flags below.
+# ---------------------------------------------------------------------------
+if [[ "${ADVISE_COVERAGE}" == "true" ]]; then
+    echo "==> Stage 5d: Coverage" >&2
+
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY RUN] docker run --rm --cap-add SYS_PTRACE --security-opt seccomp=unconfined \\" >&2
+        echo "[DRY RUN]   -v ${script_dir}:/code:ro -w /code ${BATS_KCOV_IMAGE}:${BATS_KCOV_TAG} bats-coverage <test files>" >&2
+    else
+        docker run --rm \
+            --cap-add SYS_PTRACE \
+            --security-opt seccomp=unconfined \
+            -v "${script_dir}:/code:ro" \
+            -w /code \
+            "${BATS_KCOV_IMAGE}:${BATS_KCOV_TAG}" \
+            bats-coverage \
+                test/01-build.bats \
+                test/02-image-structure.bats \
+                test/03-invocation.bats \
+                test/04-env-metadata.bats \
+                test/05-partition-discovery.bats \
+                test/06-subcommands.bats \
+                test/07-capture.bats \
+                test/08-cli.bats \
+                test/09-install.bats \
+                test/10-runtime-compat.bats \
+            >&2 || echo "    Coverage run failed (advisory only)" >&2
     fi
 fi
 

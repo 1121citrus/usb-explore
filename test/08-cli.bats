@@ -7,6 +7,7 @@
 # usage() to pass undetected).
 
 bats_require_minimum_version 1.5.0
+# shellcheck source=../src/usb-explore
 SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
 LUKS_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/luks.sh"
@@ -633,4 +634,279 @@ EOF
 @test "fixtures: enterprise helper does not swallow generator failures" {
     run ! grep -q 'generate.sh" showcase-enterprise.img.*|| true' \
         "${SUBCOMMAND_TESTS}"
+}
+
+# ---------------------------------------------------------------------------
+# _fmt_bytes — pure formatting function (no Docker, no I/O)
+# ---------------------------------------------------------------------------
+
+@test "_fmt_bytes: formats bytes (small)" {
+    source "${SCRIPT}"
+    run _fmt_bytes 512
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "512.0 B" ]]
+}
+
+@test "_fmt_bytes: formats kilobytes" {
+    source "${SCRIPT}"
+    run _fmt_bytes 1024
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "1.0 KB" ]]
+}
+
+@test "_fmt_bytes: formats megabytes" {
+    source "${SCRIPT}"
+    run _fmt_bytes 1048576
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "1.0 MB" ]]
+}
+
+@test "_fmt_bytes: formats gigabytes" {
+    source "${SCRIPT}"
+    run _fmt_bytes 1073741824
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "1.0 GB" ]]
+}
+
+@test "_fmt_bytes: handles question mark passthrough" {
+    source "${SCRIPT}"
+    run _fmt_bytes "?"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "?" ]]
+}
+
+@test "_fmt_bytes: formats fractional values" {
+    source "${SCRIPT}"
+    run _fmt_bytes 1536
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == "1.5 KB" ]]
+}
+
+# ---------------------------------------------------------------------------
+# capture — device validation (no Docker, no sudo, no disk access)
+# ---------------------------------------------------------------------------
+
+@test "capture: rejects partition slice device" {
+    run bash "${SCRIPT}" capture /dev/disk4s1
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"whole-disk"* ]]
+}
+
+@test "capture: rejects non-device path" {
+    run bash "${SCRIPT}" capture /tmp/not-a-device
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"whole-disk"* ]]
+}
+
+@test "capture: rejects capture without device argument" {
+    run bash "${SCRIPT}" capture
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "capture: rejects unknown capture option" {
+    run bash "${SCRIPT}" capture --bogus
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# archive — additional argument validation
+# ---------------------------------------------------------------------------
+
+@test "archive: rejects non-absolute src path" {
+    run bash "${SCRIPT}" archive etc/hosts ./out.tar.gz
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"absolute"* ]]
+}
+
+@test "archive: accepts .tgz extension" {
+    run bash "${SCRIPT}" --image /nonexistent.img archive /etc ./etc.tgz
+    [ "${status}" -ne 2 ]
+}
+
+@test "archive: accepts .tar.bz2 extension" {
+    run bash "${SCRIPT}" --image /nonexistent.img archive /etc ./etc.tar.bz2
+    [ "${status}" -ne 2 ]
+}
+
+@test "archive: accepts .tar.xz extension" {
+    run bash "${SCRIPT}" --image /nonexistent.img archive /etc ./etc.tar.xz
+    [ "${status}" -ne 2 ]
+}
+
+@test "archive: accepts bare .tar extension" {
+    run bash "${SCRIPT}" --image /nonexistent.img archive /etc ./etc.tar
+    [ "${status}" -ne 2 ]
+}
+
+@test "archive: rejects .zip extension" {
+    run bash "${SCRIPT}" archive /etc ./etc.zip
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"unsupported"* ]]
+}
+
+@test "archive: strips /mnt/part prefix from src" {
+    grep -q 'src#/mnt/part' "${SCRIPT}"
+}
+
+# ---------------------------------------------------------------------------
+# copy — argument validation
+# ---------------------------------------------------------------------------
+
+@test "copy: rejects missing src argument" {
+    run bash "${SCRIPT}" copy
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "copy: rejects missing dest argument" {
+    run bash "${SCRIPT}" copy /etc/hosts
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "copy: rejects non-absolute src path" {
+    run bash "${SCRIPT}" copy etc/hosts ./out
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"absolute"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# diff — argument validation
+# ---------------------------------------------------------------------------
+
+@test "diff: rejects missing image-path argument" {
+    run bash "${SCRIPT}" diff
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "diff: rejects missing ref-path argument" {
+    run bash "${SCRIPT}" diff /etc/hosts
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "diff: rejects non-absolute image-path" {
+    run bash "${SCRIPT}" diff etc/hosts /tmp
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"absolute"* ]]
+}
+
+@test "diff: rejects nonexistent ref-path" {
+    run bash "${SCRIPT}" diff /etc/hosts /nonexistent/ref
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not found"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# find — argument validation
+# ---------------------------------------------------------------------------
+
+@test "find: accepts --grep without name glob" {
+    run bash "${SCRIPT}" --image /nonexistent.img find --grep "ERROR"
+    [ "${status}" -ne 2 ]
+}
+
+@test "find: rejects --grep without pattern value" {
+    run bash "${SCRIPT}" find --grep
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "find: rejects unknown option" {
+    run bash "${SCRIPT}" find --bogus
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# run — argument validation and path rewriting
+# ---------------------------------------------------------------------------
+
+@test "run: rejects missing command after --" {
+    run bash "${SCRIPT}" run --
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "run: rejects unknown option before --" {
+    run bash "${SCRIPT}" run --bogus -- ls
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown"* ]]
+}
+
+@test "run: accepts -p between subcommand and --" {
+    run bash "${SCRIPT}" --image /nonexistent.img run -p 2 -- ls
+    [ "${status}" -ne 2 ]
+}
+
+@test "run: path rewriting converts / prefix to /mnt/part" {
+    # shellcheck disable=SC2016
+    grep -q '/mnt/part${arg}' "${SCRIPT}"
+}
+
+# ---------------------------------------------------------------------------
+# info — argument parsing
+# ---------------------------------------------------------------------------
+
+@test "info: accepts --json flag" {
+    run bash "${SCRIPT}" --image /nonexistent.img info --json
+    [ "${status}" -ne 2 ]
+}
+
+@test "info: rejects unknown option" {
+    run bash "${SCRIPT}" info --bogus
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# build — argument parsing
+# ---------------------------------------------------------------------------
+
+@test "build: rejects unknown option" {
+    run bash "${SCRIPT}" build --bogus
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"Unknown"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# serve — port validation edge cases
+# ---------------------------------------------------------------------------
+
+@test "serve: rejects port 0" {
+    run bash "${SCRIPT}" serve --port 0
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"65535"* ]]
+}
+
+@test "serve: rejects port above 65535" {
+    run bash "${SCRIPT}" serve --port 70000
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"65535"* ]]
+}
+
+@test "serve: rejects negative port" {
+    run bash "${SCRIPT}" serve --port -1
+    [ "${status}" -ne 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# check_docker — function-level test
+# ---------------------------------------------------------------------------
+
+@test "check_docker: exits non-zero when docker is absent" {
+    run env PATH=/usr/bin:/bin bash "${SCRIPT}" --image /tmp/x.img info
+    [[ "${status}" -ne 0 ]]
+}
+
+# ---------------------------------------------------------------------------
+# set_tty_flags — static analysis
+# ---------------------------------------------------------------------------
+
+@test "set_tty_flags: uses -t 0 and -t 1 for TTY detection" {
+    grep -q '\-t 0' "${SCRIPT}"
+    grep -q '\-t 1' "${SCRIPT}"
 }

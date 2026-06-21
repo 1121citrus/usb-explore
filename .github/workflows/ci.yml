@@ -31,6 +31,8 @@ jobs:
         test/06-subcommands.bats
         test/07-capture.bats
         test/08-cli.bats
+        test/09-install.bats
+        test/10-runtime-compat.bats
       test-pre-command: bash test/fixtures/generate.sh
       trivyignore: .trivyignore.yaml
       auto-promote: full

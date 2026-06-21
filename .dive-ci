@@ -1,0 +1,8 @@
+rules:
+  # apt-get upgrade replaces base-image shared libraries (libcrypto,
+  # libgnutls, libgcrypt, etc.) whose originals persist in the FROM
+  # layer.  This structural waste (~18%) is the cost of applying CVE
+  # fixes without waiting for a new base-image digest.
+  highestUserWastedPercent: 0.20
+  lowestEfficiency: 0.90
+  highestWastedBytes: disabled
