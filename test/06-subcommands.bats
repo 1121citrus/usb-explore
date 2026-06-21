@@ -610,6 +610,9 @@ ensure_enterprise_fixture() {
 
 @test "subcommand lvm: can read hostname from LVM logical volume" {
     [[ -f "${FIXTURES}/lvm.img" ]] || skip "fixture not generated"
+    docker run --rm --privileged "${IMAGE}" \
+        bash -c 'vgscan 2>&1' >/dev/null 2>&1 \
+        || skip "LVM/device-mapper unavailable in this Docker environment"
     run docker run --rm --privileged \
         -v "${FIXTURES}/lvm.img:/disk.img:ro" \
         -e "USB_PARTITION=1" \
@@ -620,6 +623,9 @@ ensure_enterprise_fixture() {
 
 @test "subcommand lvm: invalid --lv does not poison the next run" {
     [[ -f "${FIXTURES}/lvm.img" ]] || skip "fixture not generated"
+    docker run --rm --privileged "${IMAGE}" \
+        bash -c 'vgscan 2>&1' >/dev/null 2>&1 \
+        || skip "LVM/device-mapper unavailable in this Docker environment"
 
     run docker run --rm --privileged \
         -v "${FIXTURES}/lvm.img:/disk.img:ro" \
@@ -691,6 +697,9 @@ ensure_enterprise_fixture() {
 
 @test "subcommand luks-lvm: can read hostname through LUKS+LVM stack" {
     [[ -f "${FIXTURES}/luks-lvm.img" ]] || skip "fixture not generated"
+    docker run --rm --privileged "${IMAGE}" \
+        bash -c 'vgscan 2>&1' >/dev/null 2>&1 \
+        || skip "LVM/device-mapper unavailable in this Docker environment"
     run docker run --rm --privileged \
         -v "${FIXTURES}/luks-lvm.img:/disk.img:ro" \
         -e "USB_PARTITION=1" \
@@ -724,6 +733,9 @@ ensure_enterprise_fixture() {
 @test "subcommand luks: LUKS1 format (showcase-enterprise) mounts correctly" {
     ensure_enterprise_fixture \
         || skip "could not generate showcase-enterprise.img"
+    docker run --rm --privileged "${IMAGE}" \
+        bash -c 'vgscan 2>&1' >/dev/null 2>&1 \
+        || skip "LVM/device-mapper unavailable in this Docker environment"
     run docker run --rm --privileged \
         -v "${FIXTURES}/showcase-enterprise.img:/disk.img:ro" \
         -e "USB_PARTITION=2" \
