@@ -25,18 +25,36 @@ request.
    `<name>_mount`, and `<name>_unmount`.
 2. Register the driver in `src/container/dispatch.sh` by appending
    `<name>` to `FS_DRIVERS` (e.g. `FS_DRIVERS=(ext xfs vfat iso9660 <name>)`).
-3. Add the required package to `Dockerfile`.
-4. Add a fixture image and test cases in `test/05-partition-discovery.bats`
-   and `test/06-subcommands.bats`.
+   Keep `iso9660` last — it mounts `/disk.img` directly and must be the
+   fallback after all offset-based drivers.
+3. Add the required package to `Dockerfile` **and** to the
+   `fixtures/generate.sh` `apt-get install` list (the generator runs in
+   its own container).
+4. Add a fixture image to `test/fixtures/generate.sh` and test cases in
+   `test/05-partition-discovery.bats` and `test/06-subcommands.bats`.
 5. Remove the filesystem from both "not supported" locations:
    - `src/container/info.sh` — the `MOUNTABLE=false` case in the
      filesystem classification block.
    - `src/container/dispatch.sh` — the explicit error `case` arm at the
      bottom of `mount_partition`.
 
+## Adding a new storage layer driver
+
+Storage layers (LUKS, LVM) sit between partition detection and
+filesystem mounting. They transform one block device into another.
+
+1. Create `src/container/drivers/<name>.sh` implementing
+   `<name>_detect`, `<name>_activate`, and `<name>_deactivate`.
+2. Register the driver in `src/container/dispatch.sh` by appending
+   `<name>` to `LAYER_DRIVERS`.
+3. Add any required packages to `Dockerfile` and `fixtures/generate.sh`.
+4. Add fixture images and test cases. Layer drivers need tests for
+   activation, deactivation on error, stacked combinations, and
+   credential handling if applicable.
+
 ## Pull requests
 
-- Target the `main` branch.
+- Target the `dev` branch.
 - Include a description of what changed and why.
 - Ensure `./build --no-scan` passes before opening a PR.
 - Include or update tests for any new behaviour.

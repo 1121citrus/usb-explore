@@ -642,7 +642,10 @@ usb-explore shell -p 1 --luks-passphrase-file ~/pp.txt --lv root
 
 ## Building from source
 
-Requires Docker Desktop and bash 4+.
+Requires a Docker-compatible runtime and bash 4+. macOS ships bash 3.2;
+install a newer version via [Homebrew](https://brew.sh/)
+(`brew install bash`) or [pkgin](https://pkgin.net/) if you do not
+already have one.
 
 ```bash
 git clone https://github.com/1121citrus/usb-explore.git
@@ -665,7 +668,9 @@ See `./build --help` for all options.
 ## Testing
 
 Tests use [BATS](https://bats-core.readthedocs.io/) and run inside
-Docker so no additional tools are needed on the host.
+Docker so no additional tools are needed on the host. The suite
+currently has ~290 tests across 10 test files. See
+[test/README.md](test/README.md) for the full breakdown.
 
 ```bash
 # Generate fixture disk images (run once; requires Docker)
@@ -680,7 +685,7 @@ docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e "IMAGE=1121citrus/usb-explore:dev-latest" \
     bats/bats:1.13.0 \
-    bats test/03-invocation.bats
+    test/08-cli.bats
 ```
 
 `generate.sh` is idempotent: it only builds fixtures that are missing,
