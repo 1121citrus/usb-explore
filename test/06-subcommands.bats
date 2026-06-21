@@ -671,6 +671,39 @@ run_single() {
 }
 
 # ---------------------------------------------------------------------------
+# LUKS format coverage: luks.img is LUKS2, showcase-enterprise is LUKS1
+# ---------------------------------------------------------------------------
+
+@test "subcommand luks: LUKS2 format (luks.img) mounts correctly" {
+    [[ -f "${FIXTURES}/luks.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/luks.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        --entrypoint bash \
+        "${IMAGE}" -c '
+            LP=$(losetup --find --show --read-only \
+                --offset=1048576 --sizelimit=$((307200*512)) /disk.img)
+            ver=$(cryptsetup luksDump "${LP}" 2>/dev/null \
+                  | awk "/^Version:/{print \$2}")
+            losetup -d "${LP}"
+            echo "luks-version=${ver}"'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"luks-version=2"* ]]
+}
+
+@test "subcommand luks: LUKS1 format (showcase-enterprise) mounts correctly" {
+    [[ -f "${FIXTURES}/showcase-enterprise.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/showcase-enterprise.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -e "USB_EXPLORE_LUKS_PASSPHRASE=showcase" \
+        -e "USB_EXPLORE_LV=root" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"prod-db-01"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # raw.img
 # ---------------------------------------------------------------------------
 
