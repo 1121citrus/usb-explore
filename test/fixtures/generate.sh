@@ -13,6 +13,17 @@
 #   btrfs.img        — GPT, 100 MB EFI + 300 MB btrfs
 #   raw.img          — GPT, 100 MB EFI + 16 MB raw (no filesystem)
 #   erofs.img        — GPT, 100 MB EFI + 100 MB erofs (read-only)
+#   showcase-home.img       — GPT, EFI + ext4 home server (committed as
+#                             showcase-home.img.gz; extracted, not rebuilt)
+#   showcase-enterprise.img — GPT, EFI + LUKS1 → LVM (root + data); too
+#                             large to commit, generated on demand
+#
+# Usage:
+#   generate.sh [IMAGE ...]
+#     With no arguments, every missing fixture is generated. Pass one or
+#     more image basenames (e.g. "showcase-enterprise.img") to generate
+#     only those. Fixtures that already exist are left untouched, so the
+#     script is idempotent and safe to re-run.
 #
 # All disk operations work on /tmp/<img> inside the container (the container's
 # own overlay layer) to avoid virtiofs-vs-losetup compatibility issues.
@@ -21,8 +32,77 @@ set -euo pipefail
 
 FIXTURES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Optional list of image basenames to generate. Empty means "all missing".
+SELECTED_IMAGES=("$@")
+
 log()  { echo "fixtures: ${*}" >&2; }
 warn() { echo "fixtures: WARNING: ${*}" >&2; }
+
+# sha256_of — print the lowercase sha256 hex digest of a file.
+# Args:   $1 = file path
+# Stdout: 64-char hex digest, or empty when no hashing tool is available
+sha256_of() {
+    local file="${1}"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${file}" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "${file}" | awk '{print $1}'
+    fi
+}
+
+# should_generate — decide whether a fixture must be (re)built.
+# Builds only when the image is selected (or no selection was given) AND
+# the target file does not already exist in FIXTURES_DIR.
+# Args:   $1 = image basename
+# Returns: 0 to build, 1 to skip
+should_generate() {
+    local name="${1}"
+
+    # Honour an explicit selection list when one was provided.
+    if (( ${#SELECTED_IMAGES[@]} > 0 )); then
+        local wanted match=1
+        for wanted in "${SELECTED_IMAGES[@]}"; do
+            [[ "${wanted}" == "${name}" ]] && match=0 && break
+        done
+        (( match == 0 )) || return 1
+    fi
+
+    # Never rebuild a fixture that is already present.
+    [[ -f "${FIXTURES_DIR}/${name}" ]] && return 1
+    return 0
+}
+
+# extract_committed_showcase — restore committed showcase images from their
+# tracked .img.gz artifacts instead of regenerating them. This preserves the
+# exact, pinned bitstring of "nothing up the sleeves" showcase resources.
+# A pinned sha256 (showcase-home.img.gz.sha256) is verified when present.
+# Args: none
+# Returns: 0 (best-effort); exits 1 on a pinned-checksum mismatch
+extract_committed_showcase() {
+    local gz local_img sha_file expected actual
+    for gz in "${FIXTURES_DIR}"/showcase-*.img.gz; do
+        [[ -f "${gz}" ]] || continue
+
+        # Verify the committed artifact against its pinned digest, if any.
+        sha_file="${gz}.sha256"
+        if [[ -f "${sha_file}" ]]; then
+            expected=$(awk '{print $1}' "${sha_file}")
+            actual=$(sha256_of "${gz}")
+            if [[ -n "${actual}" && "${actual}" != "${expected}" ]]; then
+                warn "checksum mismatch for $(basename "${gz}")"
+                warn "  expected ${expected}"
+                warn "  actual   ${actual}"
+                exit 1
+            fi
+        fi
+
+        local_img="${gz%.gz}"
+        if [[ ! -f "${local_img}" ]]; then
+            log "Extracting committed $(basename "${gz}")..."
+            gunzip -k "${gz}"
+        fi
+    done
+}
 
 ensure_docker() {
     if ! docker info >/dev/null 2>&1; then
@@ -41,6 +121,13 @@ make_image() {
     local name="${1}"
     local script
     script=$(cat)
+
+    # Skip fixtures that already exist or were not selected on the command
+    # line. stdin is consumed above so skipping never leaks the heredoc.
+    if ! should_generate "${name}"; then
+        log "Skipping ${name} (already present or not selected)"
+        return 0
+    fi
 
     log "Generating ${name}..."
 
@@ -98,6 +185,10 @@ ${script}
 }
 
 ensure_docker
+
+# Restore committed showcase images from their pinned .img.gz artifacts
+# before any generation runs, so they are never rebuilt or clobbered.
+extract_committed_showcase
 
 # ---------------------------------------------------------------------------
 # single-ext4.img: GPT, EFI (200 MB) + ext4 root (300 MB)
@@ -484,6 +575,11 @@ SCRIPT
 
 # ---------------------------------------------------------------------------
 # showcase-home.img: realistic home server — EFI + ext4 root
+# Committed as showcase-home.img.gz and restored by
+# extract_committed_showcase above, so this block only runs when the
+# committed artifact is missing (bootstrap). Regenerating produces a new
+# bitstring; the committed .gz and its pinned sha256 are the source of
+# truth for the "nothing up the sleeves" showcase resource.
 # Small image with representative /etc, /home, /var/log content for
 # README examples. Committed as showcase-home.img.gz.
 # ---------------------------------------------------------------------------
@@ -647,18 +743,6 @@ losetup -d "${LP1}" "${LP2}"
 trap - EXIT
 cp "${IMG}" /fixtures/showcase-enterprise.img
 SCRIPT
-
-# ---------------------------------------------------------------------------
-# Extract committed .img.gz showcase files if present but uncompressed
-# ---------------------------------------------------------------------------
-for gz in "${FIXTURES_DIR}"/showcase-*.img.gz; do
-    [[ -f "${gz}" ]] || continue
-    local_img="${gz%.gz}"
-    if [[ ! -f "${local_img}" ]]; then
-        log "Extracting ${gz}..."
-        gunzip -k "${gz}"
-    fi
-done
 
 log "All fixtures generated."
 ls -lh "${FIXTURES_DIR}"/*.img 2>/dev/null || true
