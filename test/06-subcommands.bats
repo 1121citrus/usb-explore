@@ -619,6 +619,24 @@ ensure_enterprise_fixture() {
     [[ "${output}" == *"lvm-test"* ]]
 }
 
+@test "subcommand lvm: invalid --lv does not poison the next run" {
+    [[ -f "${FIXTURES}/lvm.img" ]] || skip "fixture not generated"
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/lvm.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        -e "USB_EXPLORE_LV=does-not-exist" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -ne 0 ]
+
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/lvm.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"lvm-test"* ]]
+}
+
 # ---------------------------------------------------------------------------
 # luks.img (layer driver test)
 # ---------------------------------------------------------------------------

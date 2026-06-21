@@ -10,6 +10,7 @@ bats_require_minimum_version 1.5.0
 SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
 LUKS_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/luks.sh"
+LVM_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/lvm.sh"
 
 # ---------------------------------------------------------------------------
 # --help / -h
@@ -614,4 +615,10 @@ EOF
 @test "dm cleanup: luks driver does not use fixed mapper name" {
     grep -q 'luks_dm_name' "${LUKS_DRIVER}"
     run ! grep -q 'usb-explore-luks' "${LUKS_DRIVER}"
+}
+
+@test "lvm driver: activate errors deactivate VG before exit" {
+    grep -q 'lvm_fail()' "${LVM_DRIVER}"
+    grep -q 'vg_activated=true' "${LVM_DRIVER}"
+    grep -q 'vgchange --activate n "${vg_name}"' "${LVM_DRIVER}"
 }

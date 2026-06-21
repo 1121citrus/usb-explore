@@ -27,6 +27,18 @@ lvm_detect() {
 # Returns: 0 on success; exits 5 on error
 lvm_activate() {
     local node="${1}"
+    local vg_name=""
+    local vg_activated=false
+
+    # lvm_fail — best-effort deactivate the activated VG before exiting.
+    # Args: none
+    # Returns: exits 5
+    lvm_fail() {
+        if [[ "${vg_activated}" == true && -n "${vg_name}" ]]; then
+            vgchange --activate n "${vg_name}" >/dev/null 2>&1 || true
+        fi
+        exit 5
+    }
 
     # Disable udev sync — containers have no udevd running
     mkdir -p /run/lvm
@@ -36,16 +48,19 @@ lvm_activate() {
     pvscan --cache "${node}" >/dev/null 2>&1
     vgscan --mknodes >/dev/null 2>&1
 
-    local vg_name
     vg_name=$(pvs --noheadings -o vg_name "${node}" 2>/dev/null \
               | tr -d ' ')
 
     if [[ -z "${vg_name}" ]]; then
         echo "error: no volume group found on ${node}" >&2
-        exit 5
+        lvm_fail
     fi
 
-    vgchange --activate ay --sysinit "${vg_name}" >/dev/null 2>&1
+    if ! vgchange --activate ay --sysinit "${vg_name}" >/dev/null 2>&1; then
+        echo "error: failed to activate volume group '${vg_name}'" >&2
+        lvm_fail
+    fi
+    vg_activated=true
 
     local lv_paths=()
     while IFS= read -r lv_path; do
@@ -55,7 +70,7 @@ lvm_activate() {
 
     if [[ ${#lv_paths[@]} -eq 0 ]]; then
         echo "error: volume group '${vg_name}' contains no logical volumes" >&2
-        exit 5
+        lvm_fail
     fi
 
     local selected=""
@@ -75,7 +90,7 @@ lvm_activate() {
             for lv in "${lv_paths[@]}"; do
                 echo "         $(basename "${lv}")" >&2
             done
-            exit 5
+            lvm_fail
         fi
     elif [[ ${#lv_paths[@]} -eq 1 ]]; then
         selected="${lv_paths[0]}"
@@ -90,7 +105,7 @@ lvm_activate() {
                       "${lv}" 2>/dev/null | tr -d ' ')
             echo "         ${lv_name}  (${lv_size} MB)" >&2
         done
-        exit 5
+        lvm_fail
     fi
 
     # Store VG name for deactivate
