@@ -121,6 +121,58 @@ DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
 }
 
 # ---------------------------------------------------------------------------
+# --lv flag
+# ---------------------------------------------------------------------------
+
+@test "cli: --lv flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --lv root info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --lv without value exits non-zero" {
+    run bash "${SCRIPT}" --lv
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# --luks-passphrase / --luks-key-file flags
+# ---------------------------------------------------------------------------
+
+@test "cli: --luks-passphrase flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --luks-passphrase secret info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --luks-passphrase without value exits non-zero" {
+    run bash "${SCRIPT}" --luks-passphrase
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: --luks-passphrase-file flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --luks-passphrase-file /tmp/pp info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --luks-passphrase-file without value exits non-zero" {
+    run bash "${SCRIPT}" --luks-passphrase-file
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: --luks-key-file flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --luks-key-file /tmp/key info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --luks-key-file without value exits non-zero" {
+    run bash "${SCRIPT}" --luks-key-file
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand routing — each subcommand must be recognised.
 # All tests pass --image /nonexistent.img so check_image_file exits 4 (image
 # not found) without invoking any container or host tool. Exit 3 (no Docker)

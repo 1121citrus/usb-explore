@@ -80,6 +80,14 @@
 # GLOBAL OPTIONS
 #   -i|--image PATH        Disk image file (default: ./usb.img)
 #   -p|--partition N       Partition number to mount (default: auto)
+#   --lv NAME              Select a specific LVM logical volume by name
+#   --luks-passphrase PP   Passphrase for LUKS-encrypted partitions
+#                          (visible in docker inspect; prefer
+#                          --luks-passphrase-file for sensitive use)
+#   --luks-passphrase-file PATH
+#                          Read LUKS passphrase from a file (not
+#                          exposed in process args or env vars)
+#   --luks-key-file PATH   Binary key file for LUKS-encrypted partitions
 #   --debug                Print docker run commands before executing
 #   --version              Print version and exit
 #   --help                 Print this help and exit
@@ -128,6 +136,10 @@ IMAGE_REF="${REGISTRY}/usb-explore:${IMAGE_TAG}"
 
 IMAGE_FILE="${USB_EXPLORE_IMAGE:-./usb.img}"
 PARTITION=""
+LV_NAME=""
+LUKS_PASSPHRASE=""
+LUKS_PASSPHRASE_FILE=""
+LUKS_KEY_FILE=""
 DEBUG=false
 CONTAINER_NAME="usb-explore-$$"
 CONTAINER_STARTED=false
@@ -231,7 +243,8 @@ resolve_partition() {
 
 # run_container — execute a docker run with all standard flags.
 # Args: extra docker flags (before image ref), then image + cmd
-# Reads globals: IMAGE_FILE, IMAGE_REF, CONTAINER_NAME, DEBUG
+# Reads globals: IMAGE_FILE, IMAGE_REF, CONTAINER_NAME, DEBUG,
+#   LV_NAME, LUKS_PASSPHRASE, LUKS_KEY_FILE
 run_container() {
     local docker_args=(
         run
@@ -241,6 +254,20 @@ run_container() {
         -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro"
         -e "USB_PARTITION=${PARTITION:-}"
     )
+
+    # Storage layer credentials and selection
+    [[ -n "${LV_NAME}" ]] && \
+        docker_args+=(-e "USB_EXPLORE_LV=${LV_NAME}")
+    [[ -n "${LUKS_PASSPHRASE}" ]] && \
+        docker_args+=(-e "USB_EXPLORE_LUKS_PASSPHRASE=${LUKS_PASSPHRASE}")
+    if [[ -n "${LUKS_PASSPHRASE_FILE}" ]]; then
+        docker_args+=(-v "$(realpath "${LUKS_PASSPHRASE_FILE}"):/run/luks-passphrase:ro")
+        docker_args+=(-e "USB_EXPLORE_LUKS_PASSPHRASE_FILE=/run/luks-passphrase")
+    fi
+    if [[ -n "${LUKS_KEY_FILE}" ]]; then
+        docker_args+=(-v "$(realpath "${LUKS_KEY_FILE}"):/run/luks-key:ro")
+        docker_args+=(-e "USB_EXPLORE_LUKS_KEY_FILE=/run/luks-key")
+    fi
 
     # Append any extra flags passed by the caller (e.g. -v, -e, -it)
     docker_args+=("$@")
@@ -1007,6 +1034,18 @@ while [[ $# -gt 0 ]]; do
         -p|--partition)
             [[ -n "${2:-}" ]] || die "--partition requires a number"
             PARTITION="${2}"; shift ;;
+        --lv)
+            [[ -n "${2:-}" ]] || die "--lv requires a logical volume name"
+            LV_NAME="${2}"; shift ;;
+        --luks-passphrase)
+            [[ -n "${2:-}" ]] || die "--luks-passphrase requires a value"
+            LUKS_PASSPHRASE="${2}"; shift ;;
+        --luks-passphrase-file)
+            [[ -n "${2:-}" ]] || die "--luks-passphrase-file requires a path"
+            LUKS_PASSPHRASE_FILE="${2}"; shift ;;
+        --luks-key-file)
+            [[ -n "${2:-}" ]] || die "--luks-key-file requires a path"
+            LUKS_KEY_FILE="${2}"; shift ;;
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;

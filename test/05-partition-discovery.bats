@@ -305,6 +305,70 @@ info_json() {
 }
 
 # ---------------------------------------------------------------------------
+# lvm.img
+# ---------------------------------------------------------------------------
+
+@test "discovery: lvm.img partition 1 is mountable via lvm" {
+    [[ -f "${FIXTURES}/lvm.img" ]] || skip "fixture not generated"
+    local json fstype mountable layer
+    json=$(info_json lvm.img)
+    fstype=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .fstype')
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .mountable')
+    layer=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .storage_layer')
+    [ "${fstype}" = "LVM2_member" ]
+    [ "${mountable}" = "true" ]
+    [ "${layer}" = "lvm" ]
+}
+
+@test "discovery: lvm.img info shows [mountable via lvm]" {
+    [[ -f "${FIXTURES}/lvm.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/lvm.img:/disk.img:ro" \
+        "${IMAGE}" info
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"mountable via lvm"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# luks.img
+# ---------------------------------------------------------------------------
+
+@test "discovery: luks.img partition 1 is mountable via luks" {
+    [[ -f "${FIXTURES}/luks.img" ]] || skip "fixture not generated"
+    local json fstype mountable layer
+    json=$(info_json luks.img)
+    fstype=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .fstype')
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .mountable')
+    layer=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .storage_layer')
+    [ "${fstype}" = "crypto_LUKS" ]
+    [ "${mountable}" = "true" ]
+    [ "${layer}" = "luks" ]
+}
+
+@test "discovery: luks.img info shows [mountable via luks]" {
+    [[ -f "${FIXTURES}/luks.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/luks.img:/disk.img:ro" \
+        "${IMAGE}" info
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"mountable via luks"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# luks-lvm.img
+# ---------------------------------------------------------------------------
+
+@test "discovery: luks-lvm.img partition 1 is mountable via luks" {
+    [[ -f "${FIXTURES}/luks-lvm.img" ]] || skip "fixture not generated"
+    local json mountable layer
+    json=$(info_json luks-lvm.img)
+    mountable=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .mountable')
+    layer=$(jq_from_json "${json}" '.partitions[] | select(.number == 1) | .storage_layer')
+    [ "${mountable}" = "true" ]
+    [ "${layer}" = "luks" ]
+}
+
+# ---------------------------------------------------------------------------
 # Blank image (no partition table)
 # ---------------------------------------------------------------------------
 

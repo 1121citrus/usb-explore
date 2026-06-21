@@ -592,6 +592,88 @@ run_single() {
 # raw.img
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# lvm.img (layer driver test)
+# ---------------------------------------------------------------------------
+
+@test "subcommand lvm: can read hostname from LVM logical volume" {
+    [[ -f "${FIXTURES}/lvm.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/lvm.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"lvm-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# luks.img (layer driver test)
+# ---------------------------------------------------------------------------
+
+@test "subcommand luks: can read hostname from LUKS-encrypted partition" {
+    [[ -f "${FIXTURES}/luks.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/luks.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        -e "USB_EXPLORE_LUKS_PASSPHRASE=test-passphrase" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"luks-test"* ]]
+}
+
+@test "subcommand luks: can read hostname via passphrase file" {
+    [[ -f "${FIXTURES}/luks.img" ]] || skip "fixture not generated"
+    local ppfile="${TMPDIR_WORK}/luks-pp"
+    printf 'test-passphrase' > "${ppfile}"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/luks.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        -v "${ppfile}:/run/luks-passphrase:ro" \
+        -e "USB_EXPLORE_LUKS_PASSPHRASE_FILE=/run/luks-passphrase" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"luks-test"* ]]
+}
+
+@test "subcommand luks: wrong passphrase exits non-zero" {
+    [[ -f "${FIXTURES}/luks.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/luks.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        -e "USB_EXPLORE_LUKS_PASSPHRASE=wrong-passphrase" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -ne 0 ]
+}
+
+@test "subcommand luks: no credentials exits non-zero with helpful message" {
+    [[ -f "${FIXTURES}/luks.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/luks.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"no credentials"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# luks-lvm.img (stacking test: LUKS → LVM → ext4)
+# ---------------------------------------------------------------------------
+
+@test "subcommand luks-lvm: can read hostname through LUKS+LVM stack" {
+    [[ -f "${FIXTURES}/luks-lvm.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/luks-lvm.img:/disk.img:ro" \
+        -e "USB_PARTITION=1" \
+        -e "USB_EXPLORE_LUKS_PASSPHRASE=test-passphrase" \
+        "${IMAGE}" run cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"luks-lvm-test"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# raw.img
+# ---------------------------------------------------------------------------
+
 @test "subcommand info --json: raw.img partition 2 raw_hint is non-null" {
     [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
     local hint

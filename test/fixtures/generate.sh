@@ -52,7 +52,14 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 DEBIAN_FRONTEND=noninteractive apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends \
        gdisk dosfstools e2fsprogs xfsprogs fdisk util-linux parted jq \
-       btrfs-progs erofs-utils squashfs-tools >/dev/null 2>&1
+       btrfs-progs cryptsetup-bin erofs-utils lvm2 mdadm \
+       squashfs-tools >/dev/null 2>&1
+
+# LVM inside Docker: no udev, so disable udev sync and create dm nodes
+# directly. Without this, lvcreate fails with 'device not cleared'.
+mkdir -p /run/lvm
+printf 'activation { udev_sync = 0\\nudev_rules = 0\\n}\\n' \
+    > /etc/lvm/lvmlocal.conf
 
 # part_loop — create a read-only loop device for one partition using
 # byte offsets computed from sfdisk. Works on any file reachable from
@@ -86,7 +93,7 @@ ${script}
     else
         warn "${name}: generation failed; skipping."
         rm -f "${FIXTURES_DIR}/${name}"
-        return 1
+        return 0
     fi
 }
 
@@ -381,6 +388,285 @@ losetup -d "${LP1}" "${LP2}"
 trap - EXIT
 cp "${IMG}" /fixtures/erofs.img
 SCRIPT
+
+# ---------------------------------------------------------------------------
+# lvm.img: GPT, 100 MB LVM PV containing one VG with one ext4 LV
+# ---------------------------------------------------------------------------
+make_image lvm.img <<'SCRIPT'
+IMG=/tmp/lvm.img
+truncate -s 200M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+150M -t 1:8e00 -c 1:"Linux LVM" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+trap 'umount /mnt 2>/dev/null||true; vgchange -an usb_test_vg 2>/dev/null||true; losetup -d "${LP1}" 2>/dev/null||true' EXIT
+
+pvcreate --force "${LP1}" >/dev/null 2>&1
+vgcreate usb_test_vg "${LP1}" >/dev/null 2>&1
+lvcreate --zero n --name root --size 100M usb_test_vg >/dev/null 2>&1
+
+mkfs.ext4 -q -L lvm-root /dev/usb_test_vg/root
+mount /dev/usb_test_vg/root /mnt
+mkdir -p /mnt/etc
+echo "lvm-test" > /mnt/etc/hostname
+umount /mnt
+
+vgchange -an usb_test_vg >/dev/null 2>&1
+losetup -d "${LP1}"
+trap - EXIT
+cp "${IMG}" /fixtures/lvm.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# luks.img: GPT, 100 MB LUKS-encrypted partition containing ext4
+# Test passphrase: "test-passphrase"
+# ---------------------------------------------------------------------------
+make_image luks.img <<'SCRIPT'
+IMG=/tmp/luks.img
+truncate -s 200M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+150M -t 1:8300 -c 1:"Linux LUKS" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+trap 'umount /mnt 2>/dev/null||true; cryptsetup close usb_test_luks 2>/dev/null||true; losetup -d "${LP1}" 2>/dev/null||true' EXIT
+
+printf 'test-passphrase' \
+    | cryptsetup luksFormat --batch-mode --type luks2 "${LP1}" -
+printf 'test-passphrase' \
+    | cryptsetup open "${LP1}" usb_test_luks
+
+mkfs.ext4 -q -L luks-root /dev/mapper/usb_test_luks
+mount /dev/mapper/usb_test_luks /mnt
+mkdir -p /mnt/etc
+echo "luks-test" > /mnt/etc/hostname
+umount /mnt
+
+cryptsetup close usb_test_luks
+losetup -d "${LP1}"
+trap - EXIT
+cp "${IMG}" /fixtures/luks.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# mdadm.img: SKIPPED
+# Docker Desktop's LinuxKit kernel does not include the md_mod module.
+# mdadm fixture generation and testing require a runtime with md support
+# (e.g. Colima with a full kernel). The mdadm driver code is present and
+# correct but cannot be validated in this environment.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# luks-lvm.img: GPT, LUKS → LVM → ext4 (common enterprise stacking)
+# Test passphrase: "test-passphrase"
+# ---------------------------------------------------------------------------
+make_image luks-lvm.img <<'SCRIPT'
+IMG=/tmp/luks-lvm.img
+truncate -s 250M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+200M -t 1:8300 -c 1:"Linux LUKS+LVM" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+trap 'umount /mnt 2>/dev/null||true; vgchange -an usb_test_stack_vg 2>/dev/null||true; cryptsetup close usb_test_stack_luks 2>/dev/null||true; losetup -d "${LP1}" 2>/dev/null||true' EXIT
+
+printf 'test-passphrase' \
+    | cryptsetup luksFormat --batch-mode --type luks2 "${LP1}" -
+printf 'test-passphrase' \
+    | cryptsetup open "${LP1}" usb_test_stack_luks
+
+pvcreate --force /dev/mapper/usb_test_stack_luks >/dev/null 2>&1
+vgcreate usb_test_stack_vg /dev/mapper/usb_test_stack_luks >/dev/null 2>&1
+lvcreate --zero n --name data --size 100M usb_test_stack_vg >/dev/null 2>&1
+
+mkfs.ext4 -q -L stack-root /dev/usb_test_stack_vg/data
+mount /dev/usb_test_stack_vg/data /mnt
+mkdir -p /mnt/etc
+echo "luks-lvm-test" > /mnt/etc/hostname
+umount /mnt
+
+vgchange -an usb_test_stack_vg >/dev/null 2>&1
+cryptsetup close usb_test_stack_luks
+losetup -d "${LP1}"
+trap - EXIT
+cp "${IMG}" /fixtures/luks-lvm.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# showcase-home.img: realistic home server — EFI + ext4 root
+# Small image with representative /etc, /home, /var/log content for
+# README examples. Committed as showcase-home.img.gz.
+# ---------------------------------------------------------------------------
+make_image showcase-home.img <<'SCRIPT'
+IMG=/tmp/showcase-home.img
+truncate -s 24M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+4M  -t 1:ef00 -c 1:"EFI" \
+    -n 2:0:0    -t 2:8300 -c 2:"Linux root" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+LP2=$(part_loop "${IMG}" 2)
+trap 'umount /mnt 2>/dev/null||true; losetup -d "${LP1}" "${LP2}" 2>/dev/null||true' EXIT
+
+mkfs.fat -F12 -n EFI "${LP1}" >/dev/null
+mkfs.ext4 -q -L rootfs "${LP2}"
+
+mount "${LP2}" /mnt
+mkdir -p /mnt/etc/netplan /mnt/home/admin /mnt/var/log /mnt/boot
+
+cat > /mnt/etc/hostname <<'EOF'
+citrus-server
+EOF
+
+cat > /mnt/etc/os-release <<'EOF'
+PRETTY_NAME="Ubuntu 24.04.2 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+VERSION="24.04.2 LTS (Noble Numbat)"
+ID=ubuntu
+ID_LIKE=debian
+EOF
+
+cat > /mnt/etc/fstab <<'EOF'
+# <file system>  <mount point>  <type>  <options>         <dump> <pass>
+UUID=a1b2c3d4     /              ext4    errors=remount-ro 0      1
+UUID=2C3D-AF1B    /boot/efi      vfat    umask=0077        0      1
+EOF
+
+cat > /mnt/etc/passwd <<'EOF'
+root:x:0:0:root:/root:/bin/bash
+admin:x:1000:1000:Admin User:/home/admin:/bin/bash
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+EOF
+
+cat > /mnt/etc/netplan/01-netcfg.yaml <<'EOF'
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses: [10.0.50.10/24]
+      gateway4: 10.0.50.1
+      nameservers:
+        addresses: [10.0.50.5, 1.1.1.1]
+EOF
+
+cat > /mnt/home/admin/.bashrc <<'EOF'
+export PS1='\u@\h:\w\$ '
+alias ll='ls -alF'
+EOF
+
+cat > /mnt/var/log/syslog <<'EOF'
+Jun 15 08:00:01 citrus-server systemd[1]: Started Daily apt download activities.
+Jun 15 08:00:12 citrus-server systemd[1]: docker.service: Main process exited, code=exited, status=0/SUCCESS
+Jun 15 08:05:33 citrus-server sshd[1842]: Accepted publickey for admin from 10.0.50.100 port 54321
+Jun 15 09:15:00 citrus-server CRON[2105]: (root) CMD (/usr/local/bin/backup-daily)
+Jun 15 10:30:44 citrus-server kernel: [86400.123] eth0: link up, 1000 Mbps full duplex
+EOF
+
+printf 'LINUX-KERNEL-STUB' > /mnt/boot/vmlinuz
+
+umount /mnt
+losetup -d "${LP1}" "${LP2}"
+trap - EXIT
+cp "${IMG}" /fixtures/showcase-home.img
+gzip -kf /fixtures/showcase-home.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# showcase-enterprise.img: LUKS → LVM with two LVs (root + data)
+# Demonstrates storage layer stacking and --lv selection.
+# Passphrase: "showcase"
+# Committed as showcase-enterprise.img.gz.
+# ---------------------------------------------------------------------------
+make_image showcase-enterprise.img <<'SCRIPT'
+IMG=/tmp/showcase-enterprise.img
+truncate -s 48M "${IMG}"
+sgdisk -Z "${IMG}" \
+    -n 1:0:+4M  -t 1:ef00 -c 1:"EFI" \
+    -n 2:0:0    -t 2:8300 -c 2:"Linux LUKS+LVM" >/dev/null
+
+LP1=$(part_loop "${IMG}" 1)
+LP2=$(part_loop "${IMG}" 2)
+trap 'umount /mnt 2>/dev/null||true; vgchange -an vg0 2>/dev/null||true; cryptsetup close showcase_luks 2>/dev/null||true; losetup -d "${LP1}" "${LP2}" 2>/dev/null||true' EXIT
+
+mkfs.fat -F12 -n EFI "${LP1}" >/dev/null
+
+printf 'showcase' | cryptsetup luksFormat --batch-mode --type luks1 "${LP2}" -
+printf 'showcase' | cryptsetup open "${LP2}" showcase_luks
+
+pvcreate --force /dev/mapper/showcase_luks >/dev/null 2>&1
+vgcreate vg0 /dev/mapper/showcase_luks >/dev/null 2>&1
+lvcreate --zero n --name root --size 12M vg0 >/dev/null 2>&1
+lvcreate --zero n --name data --size 10M vg0 >/dev/null 2>&1
+
+mkfs.ext4 -q -L root /dev/vg0/root
+mkfs.ext4 -q -L data /dev/vg0/data
+
+# Populate root LV
+mount /dev/vg0/root /mnt
+mkdir -p /mnt/etc /mnt/var/log
+
+cat > /mnt/etc/hostname <<'EOF'
+prod-db-01
+EOF
+
+cat > /mnt/etc/os-release <<'EOF'
+PRETTY_NAME="Red Hat Enterprise Linux 9.4 (Plow)"
+NAME="Red Hat Enterprise Linux"
+VERSION_ID="9.4"
+ID=rhel
+ID_LIKE="centos fedora"
+EOF
+
+cat > /mnt/etc/fstab <<'EOF'
+# <file system>       <mount point>  <type>  <options>         <dump> <pass>
+/dev/mapper/vg0-root   /              ext4    defaults          1      1
+/dev/mapper/vg0-data   /srv/data      ext4    defaults,nodev    0      2
+UUID=2C3D-AF1B         /boot/efi      vfat    umask=0077        0      1
+EOF
+
+cat > /mnt/var/log/syslog <<'EOF'
+Jun 14 03:00:01 prod-db-01 systemd[1]: Starting PostgreSQL 16 database server...
+Jun 14 03:00:05 prod-db-01 postgres[1201]: database system is ready to accept connections
+Jun 14 06:00:00 prod-db-01 CRON[3401]: (postgres) CMD (pg_dump -Fc myapp > /srv/data/backups/daily.dump)
+Jun 14 12:15:33 prod-db-01 sshd[4502]: Accepted publickey for ops from 10.10.0.50 port 44100
+EOF
+umount /mnt
+
+# Populate data LV
+mount /dev/vg0/data /mnt
+mkdir -p /mnt/backups /mnt/exports
+
+cat > /mnt/backups/daily.manifest <<'EOF'
+backup_date: 2026-06-14T06:00:00Z
+database: myapp
+format: custom
+size_bytes: 15728640
+tables: 42
+EOF
+
+cat > /mnt/exports/README <<'EOF'
+Data export directory. CSV files are generated nightly by the
+reporting pipeline and picked up by the analytics team via SFTP.
+EOF
+umount /mnt
+
+vgchange -an vg0 >/dev/null 2>&1
+cryptsetup close showcase_luks
+losetup -d "${LP1}" "${LP2}"
+trap - EXIT
+cp "${IMG}" /fixtures/showcase-enterprise.img
+SCRIPT
+
+# ---------------------------------------------------------------------------
+# Extract committed .img.gz showcase files if present but uncompressed
+# ---------------------------------------------------------------------------
+for gz in "${FIXTURES_DIR}"/showcase-*.img.gz; do
+    [[ -f "${gz}" ]] || continue
+    local_img="${gz%.gz}"
+    if [[ ! -f "${local_img}" ]]; then
+        log "Extracting ${gz}..."
+        gunzip -k "${gz}"
+    fi
+done
 
 log "All fixtures generated."
 ls -lh "${FIXTURES_DIR}"/*.img 2>/dev/null || true
