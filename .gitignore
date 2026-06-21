@@ -1,1 +1,2 @@
 *.img
+!test/fixtures/showcase-home.img.gz

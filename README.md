@@ -160,6 +160,19 @@ Filesystem support is implemented via a modular driver system inside the contain
 | erofs | Home Assistant OS system partitions (`hassos-system0`/`hassos-system1`) |
 | iso9660 | Hybrid bootable ISO/GPT images |
 
+Storage abstraction layers are handled transparently via a layered
+driver pipeline that activates each layer before mounting:
+
+| Layer | Typical use | Notes |
+| --- | --- | --- |
+| LVM | Enterprise Linux, RHEL default installer | VG activated read-only; `--lv` selects when multiple LVs exist |
+| LUKS | Full-disk encryption (Ubuntu, Fedora) | Requires `--luks-passphrase` or `--luks-key-file` |
+| mdadm RAID-1 | Software mirroring | Single-member only; requires `md_mod` kernel module (not in Docker Desktop) |
+
+Layers can stack (e.g. LUKS → LVM → ext4). `info` reports the
+detected storage layer in the Notes column and the `storage_layer`
+field in JSON output.
+
 All partition mounts are strictly read-only, guaranteeing the captured disk image remains immutable. While the container requires `--privileged` to manage loop devices, its access is bounded by the Docker Desktop Linux VM, safely isolating the macOS host.
 
 ---
@@ -274,16 +287,28 @@ Prints a table of all partitions, their filesystem type, size, and
 whether they can be mounted. Useful for understanding what is on the
 drive before deciding which partition to explore.
 
-**Example output:**
+**Example — home server (ext4 root):**
 
 ```text
-Image:  usb.img  (29.8 GB)
+Image:  /disk.img  (24.0 MB)
 Scheme: GPT
 
-  #   Filesystem   Size      Label              UUID          Notes
-  1   vfat         200 MB    EFI                2C3D-AF1B     [mountable]
-  2   ext4         29.0 GB   cloudimg-rootfs    a1b2c3d4      [mountable]
-  3   raw          8.0 MB    bootstate                        [raw: BOOT_ORDER=B A MACHINE_ID=...]
+  #    Filesystem  Size        Label                   UUID        Notes
+  1    vfat        4.0 MB      EFI                     13FD-321    [mountable]
+  2    ext4        19.0 MB     rootfs                  2ca3ba92    [mountable]
+
+2 mountable partitions found. Pass -p N to select one.
+```
+
+**Example — enterprise server (LUKS + LVM):**
+
+```text
+Image:  /disk.img  (48.0 MB)
+Scheme: GPT
+
+  #    Filesystem  Size        Label                   UUID        Notes
+  1    vfat        4.0 MB      EFI                     1492-B18    [mountable]
+  2    crypto_LUKS  43.0 MB     Linux LUKS+LVM          d9fd98d2    [mountable via luks]
 
 2 mountable partitions found. Pass -p N to select one.
 ```
@@ -292,6 +317,10 @@ The **Notes** column shows:
 
 - `[mountable]` — a filesystem driver is available; the partition can be
   used with `shell`, `copy`, `run`, etc.
+- `[mountable via lvm]`, `[mountable via luks]` — a storage abstraction
+  layer is detected. The layer is activated transparently before
+  mounting. LUKS partitions require `--luks-passphrase-file` or
+  `--luks-passphrase`. LVM partitions with multiple LVs require `--lv`.
 - `[raw: ...]` — no recognised filesystem (`blkid` found nothing).
   `usb-explore` runs a two-stage probe to extract a short description:
   first `file(1)` magic, then a null-terminated string scan. The extracted
@@ -301,8 +330,9 @@ The **Notes** column shows:
 
 `--json` emits machine-readable JSON for scripting. Each partition record
 includes `fstype` (`"raw"` when no filesystem is detected), `mountable`,
-`mountable_reason`, and — for raw partitions — `raw_hint` (the same
-content shown in the Notes column, or `null` when nothing was found).
+`mountable_reason`, `storage_layer` (`"lvm"`, `"luks"`, `"mdadm"`, or
+`null`), and — for raw partitions — `raw_hint` (the same content shown
+in the Notes column, or `null` when nothing was found).
 
 ---
 
@@ -562,8 +592,33 @@ usb-explore shell -p 2       # use partition 2
 usb-explore copy -p 3 /etc ./etc-from-p3
 ```
 
-BIOS Boot, Linux swap, LVM physical volume, and raw (unrecognised
-filesystem) partitions are excluded from the mountable count.
+BIOS Boot, Linux swap, and raw (unrecognised filesystem) partitions are
+excluded from the mountable count. LVM, LUKS, and mdadm partitions are
+mountable — storage layers are activated automatically before mounting.
+
+### Storage layer options
+
+When a partition uses LVM, LUKS, or mdadm, additional flags may be
+needed:
+
+```bash
+# LVM: auto-selects the single LV; use --lv when multiple exist
+usb-explore shell -p 2
+usb-explore shell -p 2 --lv data
+
+# LUKS: read passphrase from a file (recommended — not exposed in
+# process args or docker inspect)
+usb-explore shell -p 2 --luks-passphrase-file /path/to/passphrase.txt
+
+# LUKS: supply passphrase directly (visible in docker inspect)
+usb-explore shell -p 2 --luks-passphrase 'my secret'
+
+# LUKS: use a binary key file
+usb-explore shell -p 2 --luks-key-file /path/to/keyfile
+
+# Stacked LUKS → LVM: both flags work together
+usb-explore shell -p 1 --luks-passphrase-file ~/pp.txt --lv root
+```
 
 ---
 
