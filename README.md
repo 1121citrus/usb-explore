@@ -166,7 +166,7 @@ driver pipeline that activates each layer before mounting:
 | Layer | Typical use | Notes |
 | --- | --- | --- |
 | LVM | Enterprise Linux, RHEL default installer | VG activated read-only; `--lv` selects when multiple LVs exist |
-| LUKS | Full-disk encryption (Ubuntu, Fedora) | Requires `--luks-passphrase-file`, `--luks-passphrase`, or `--luks-key-file` |
+| LUKS | Full-disk encryption (Ubuntu, Fedora) | Decrypt with `--luks-passphrase-file` (recommended), `--luks-key-file`, or `--luks-passphrase` |
 
 Layers can stack (e.g. LUKS → LVM → ext4). `info` reports the
 detected storage layer in the Notes column and the `storage_layer`
@@ -619,6 +619,15 @@ usb-explore shell -p 2 --luks-key-file /path/to/keyfile
 usb-explore shell -p 1 --luks-passphrase-file ~/pp.txt --lv root
 ```
 
+> **Prefer `--luks-passphrase-file` for LUKS credentials.** The file is
+> bind-mounted read-only into the container and read there; the secret
+> never appears in the process argument list or the container
+> environment, so it is not visible to `ps`, `docker inspect`, or shell
+> history. `--luks-key-file` is equally safe for binary keys. Use
+> `--luks-passphrase` only for throwaway test images — the value is
+> passed as an environment variable and is visible in `docker inspect`
+> and process listings.
+
 ---
 
 ## Configuration
@@ -673,6 +682,23 @@ docker run --rm \
     bats/bats:1.13.0 \
     bats test/03-invocation.bats
 ```
+
+`generate.sh` is idempotent: it only builds fixtures that are missing,
+and accepts image basenames to build a specific one (for example
+`bash test/fixtures/generate.sh showcase-enterprise.img`).
+
+The `showcase-*` fixtures double as the README example images and are
+deliberately "nothing up the sleeves" — real, burnable disk images you
+could `dd` to a USB stick and mount on any Linux system:
+
+- **`showcase-home.img.gz`** is committed to the repository (<30 KB
+  gzipped). Because it is small, it ships as a genuine, fixed resource
+  rather than something generated on the fly; its contents are pinned by
+  `showcase-home.img.gz.sha256` and verified by the test suite.
+- **`showcase-enterprise.img`** (LUKS1 → LVM, ~50 MB) is far too large
+  to commit, so it is generated on demand the first time a test needs
+  it. Its LUKS layer uses random salts, so it is not bit-reproducible
+  and is intentionally not pinned.
 
 ---
 
