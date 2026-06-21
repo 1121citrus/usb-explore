@@ -585,3 +585,19 @@ EOF
     rm -f "${tmp}"; rm -rf "${stub}"
     [ "${status}" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Static-analysis — dm cleanup is scoped, not global
+#
+# dmsetup remove_all nukes every dm mapping in the kernel, including
+# those owned by other containers. The cleanup must be scoped to
+# usb-explore's own mappings only.
+# ---------------------------------------------------------------------------
+
+@test "dm cleanup: dispatch.sh does not use dmsetup remove_all" {
+    run ! grep -q 'dmsetup remove_all' "${DISPATCH}"
+}
+
+@test "dm cleanup: dispatch.sh uses _cleanup_stale_dm for scoped cleanup" {
+    grep -q '_cleanup_stale_dm' "${DISPATCH}"
+}
