@@ -178,9 +178,9 @@ ${script}
 " 2>&1; then
         log "  -> ${FIXTURES_DIR}/${name}"
     else
-        warn "${name}: generation failed; skipping."
+        warn "${name}: generation failed; aborting."
         rm -f "${FIXTURES_DIR}/${name}"
-        return 0
+        return 1
     fi
 }
 

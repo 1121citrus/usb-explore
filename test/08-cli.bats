@@ -11,6 +11,8 @@ SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
 LUKS_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/luks.sh"
 LVM_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/lvm.sh"
+FIXTURE_GENERATOR="${BATS_TEST_DIRNAME}/fixtures/generate.sh"
+SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
 
 # ---------------------------------------------------------------------------
 # --help / -h
@@ -621,4 +623,14 @@ EOF
     grep -q 'lvm_fail()' "${LVM_DRIVER}"
     grep -q 'vg_activated=true' "${LVM_DRIVER}"
     grep -q 'vgchange --activate n "${vg_name}"' "${LVM_DRIVER}"
+}
+
+@test "fixtures: generator fails fast on image creation errors" {
+    grep -q 'generation failed; aborting' "${FIXTURE_GENERATOR}"
+    grep -q 'return 1' "${FIXTURE_GENERATOR}"
+}
+
+@test "fixtures: enterprise helper does not swallow generator failures" {
+    run ! grep -q 'generate.sh" showcase-enterprise.img.*|| true' \
+        "${SUBCOMMAND_TESTS}"
 }

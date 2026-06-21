@@ -36,8 +36,7 @@ run_single() {
 ensure_enterprise_fixture() {
     [[ -f "${FIXTURES}/showcase-enterprise.img" ]] && return 0
     command -v docker >/dev/null 2>&1 || return 1
-    bash "${FIXTURES}/generate.sh" showcase-enterprise.img >/dev/null 2>&1 \
-        || true
+    bash "${FIXTURES}/generate.sh" showcase-enterprise.img >/dev/null 2>&1
     [[ -f "${FIXTURES}/showcase-enterprise.img" ]]
 }
 
