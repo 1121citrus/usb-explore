@@ -9,6 +9,10 @@
 bats_require_minimum_version 1.5.0
 SCRIPT="${BATS_TEST_DIRNAME}/../src/usb-explore"
 DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
+LUKS_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/luks.sh"
+LVM_DRIVER="${BATS_TEST_DIRNAME}/../src/container/drivers/lvm.sh"
+FIXTURE_GENERATOR="${BATS_TEST_DIRNAME}/fixtures/generate.sh"
+SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
 
 # ---------------------------------------------------------------------------
 # --help / -h
@@ -118,6 +122,58 @@ DISPATCH="${BATS_TEST_DIRNAME}/../src/container/dispatch.sh"
 @test "cli: -p short flag is accepted" {
     run bash "${SCRIPT}" -i /nonexistent.img -p 2 info
     [ "${status}" -ne 2 ]
+}
+
+# ---------------------------------------------------------------------------
+# --lv flag
+# ---------------------------------------------------------------------------
+
+@test "cli: --lv flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --lv root info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --lv without value exits non-zero" {
+    run bash "${SCRIPT}" --lv
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# --luks-passphrase / --luks-key-file flags
+# ---------------------------------------------------------------------------
+
+@test "cli: --luks-passphrase flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --luks-passphrase secret info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --luks-passphrase without value exits non-zero" {
+    run bash "${SCRIPT}" --luks-passphrase
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: --luks-passphrase-file flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --luks-passphrase-file /tmp/pp info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --luks-passphrase-file without value exits non-zero" {
+    run bash "${SCRIPT}" --luks-passphrase-file
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: --luks-key-file flag is parsed (not a usage error)" {
+    run bash "${SCRIPT}" -i /nonexistent.img --luks-key-file /tmp/key info
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --luks-key-file without value exits non-zero" {
+    run bash "${SCRIPT}" --luks-key-file
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -532,4 +588,49 @@ EOF
         bash "${SCRIPT}" --image "${tmp}" -p 1 serve
     rm -f "${tmp}"; rm -rf "${stub}"
     [ "${status}" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
+# Static-analysis — dm cleanup is scoped, not global
+#
+# dmsetup remove_all nukes every dm mapping in the kernel, including
+# those owned by other containers. The cleanup must be scoped to
+# usb-explore's own mappings only.
+# ---------------------------------------------------------------------------
+
+@test "dm cleanup: dispatch.sh does not use dmsetup remove_all" {
+    run ! grep -q 'dmsetup remove_all' "${DISPATCH}"
+}
+
+@test "dm cleanup: dispatch.sh uses _cleanup_stale_dm for scoped cleanup" {
+    grep -q '_cleanup_stale_dm' "${DISPATCH}"
+}
+
+@test "dm cleanup: host passes USB_EXPLORE_RUN_SCOPE to container" {
+    grep -q 'USB_EXPLORE_RUN_SCOPE=${CONTAINER_NAME}' "${SCRIPT}"
+}
+
+@test "dm cleanup: dispatch.sh scopes cleanup by run prefix" {
+    grep -q 'USB_EXPLORE_DM_SCOPE_PREFIX' "${DISPATCH}"
+}
+
+@test "dm cleanup: luks driver does not use fixed mapper name" {
+    grep -q 'luks_dm_name' "${LUKS_DRIVER}"
+    run ! grep -q 'usb-explore-luks' "${LUKS_DRIVER}"
+}
+
+@test "lvm driver: activate errors deactivate VG before exit" {
+    grep -q 'lvm_fail()' "${LVM_DRIVER}"
+    grep -q 'vg_activated=true' "${LVM_DRIVER}"
+    grep -q 'vgchange --activate n "${vg_name}"' "${LVM_DRIVER}"
+}
+
+@test "fixtures: generator fails fast on image creation errors" {
+    grep -q 'generation failed; aborting' "${FIXTURE_GENERATOR}"
+    grep -q 'return 1' "${FIXTURE_GENERATOR}"
+}
+
+@test "fixtures: enterprise helper does not swallow generator failures" {
+    run ! grep -q 'generate.sh" showcase-enterprise.img.*|| true' \
+        "${SUBCOMMAND_TESTS}"
 }

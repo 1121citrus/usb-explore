@@ -43,12 +43,14 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       btrfs-progs \
       bzip2 \
+      cryptsetup-bin \
       erofs-utils \
       diffutils \
       e2fsprogs \
       fdisk \
       file \
       jq \
+      lvm2 \
       mc \
       ncdu \
       python3 \

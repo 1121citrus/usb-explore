@@ -42,13 +42,15 @@ gpt_type_name() {
     esac
 }
 
-# classify_partition — set MOUNTABLE and MOUNTABLE_REASON globals.
+# classify_partition — set MOUNTABLE, MOUNTABLE_REASON, and
+# STORAGE_LAYER globals.
 # Args: $1 = GPT type GUID or MBR hex type; $2 = blkid TYPE value;
 #       $3 = attrs string from sfdisk; $4 = partition size in bytes
 classify_partition() {
     local type_id="${1^^}" fstype="${2}" attrs="${3:-}" size_bytes="${4:-0}"
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
+    STORAGE_LAYER=""
 
     case "${type_id}" in
         # EFI is NOT excluded: the vfat driver mounts it fine. It is excluded
@@ -56,8 +58,9 @@ classify_partition() {
         # summary line), but explicitly selecting it with -p N always works.
         21686148-*) MOUNTABLE=false; MOUNTABLE_REASON="BIOS Boot Partition excluded"; return ;;
         0657FD6D-*) MOUNTABLE=false; MOUNTABLE_REASON="Linux swap excluded"; return ;;
-        E6D6D379-*) MOUNTABLE=false; MOUNTABLE_REASON="LVM physical volume excluded"; return ;;
-        00|82|8E|EE) MOUNTABLE=false; MOUNTABLE_REASON="partition type excluded (${type_id})"; return ;;
+        E6D6D379-*) MOUNTABLE=true; STORAGE_LAYER="lvm"; return ;;
+        00|82|EE) MOUNTABLE=false; MOUNTABLE_REASON="partition type excluded (${type_id})"; return ;;
+        8E) MOUNTABLE=true; STORAGE_LAYER="lvm"; return ;;
     esac
 
     # xorriso hybrid ISO disks: Microsoft Basic Data (EBD0A0A2) + GUID:60
@@ -76,6 +79,12 @@ classify_partition() {
             return
         fi
     fi
+
+    # Storage abstraction layers detected by blkid
+    case "${fstype}" in
+        crypto_LUKS)       MOUNTABLE=true; STORAGE_LAYER="luks"; return ;;
+        LVM2_member)       MOUNTABLE=true; STORAGE_LAYER="lvm"; return ;;
+    esac
 
     case "${fstype}" in
         swap|"") MOUNTABLE=false; MOUNTABLE_REASON="no recognised filesystem"; return ;;
@@ -220,6 +229,7 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
 
     MOUNTABLE=true
     MOUNTABLE_REASON="null"
+    STORAGE_LAYER=""
     classify_partition "${TYPE}" "${FSTYPE}" "${ATTRS}" "${SIZE_BYTES}"
 
     RAW_HINT=""
@@ -244,6 +254,7 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
         --argjson mount   "${MOUNTABLE}" \
         --arg     mreason "${MOUNTABLE_REASON}" \
         --arg     rhint   "${RAW_HINT}" \
+        --arg     slayer  "${STORAGE_LAYER}" \
         '{
             number:           $num,
             node:             $node,
@@ -255,6 +266,7 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
             type_name:        $tname,
             fstype:           (if $fstype == "" then "raw" else $fstype end),
             raw_hint:         (if $rhint == "" then null else $rhint end),
+            storage_layer:    (if $slayer == "" then null else $slayer end),
             label:            $label,
             uuid:             $uuid,
             uuid_short:       $uuid_s,
@@ -309,16 +321,19 @@ printf "  %-3s  %-10s  %-10s  %-22s  %-10s  %s\n" \
     "#" "Filesystem" "Size" "Label" "UUID" "Notes"
 
 while IFS= read -r p; do
-    num=$(echo "${p}"      | jq -r '.number')
-    fstype=$(echo "${p}"   | jq -r '.fstype')
-    size=$(echo "${p}"     | jq -r '.size_human')
-    lbl=$(echo "${p}"      | jq -r '.label')
-    uuid=$(echo "${p}"     | jq -r '.uuid_short')
-    mount=$(echo "${p}"    | jq -r '.mountable')
-    reason=$(echo "${p}"   | jq -r '.mountable_reason // ""')
-    raw_hint=$(echo "${p}" | jq -r '.raw_hint // ""')
+    num=$(echo "${p}"       | jq -r '.number')
+    fstype=$(echo "${p}"    | jq -r '.fstype')
+    size=$(echo "${p}"      | jq -r '.size_human')
+    lbl=$(echo "${p}"       | jq -r '.label')
+    uuid=$(echo "${p}"      | jq -r '.uuid_short')
+    mount=$(echo "${p}"     | jq -r '.mountable')
+    reason=$(echo "${p}"    | jq -r '.mountable_reason // ""')
+    raw_hint=$(echo "${p}"  | jq -r '.raw_hint // ""')
+    slayer=$(echo "${p}"    | jq -r '.storage_layer // ""')
 
-    if [[ "${mount}" == "true" ]]; then
+    if [[ "${mount}" == "true" && -n "${slayer}" ]]; then
+        note="[mountable via ${slayer}]"
+    elif [[ "${mount}" == "true" ]]; then
         note="[mountable]"
     elif [[ -n "${raw_hint}" ]]; then
         note="[raw: ${raw_hint}]"

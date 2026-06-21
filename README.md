@@ -160,6 +160,18 @@ Filesystem support is implemented via a modular driver system inside the contain
 | erofs | Home Assistant OS system partitions (`hassos-system0`/`hassos-system1`) |
 | iso9660 | Hybrid bootable ISO/GPT images |
 
+Storage abstraction layers are handled transparently via a layered
+driver pipeline that activates each layer before mounting:
+
+| Layer | Typical use | Notes |
+| --- | --- | --- |
+| LVM | Enterprise Linux, RHEL default installer | VG activated read-only; `--lv` selects when multiple LVs exist |
+| LUKS | Full-disk encryption (Ubuntu, Fedora) | Decrypt with `--luks-passphrase-file` (recommended), `--luks-key-file`, or `--luks-passphrase` |
+
+Layers can stack (e.g. LUKS → LVM → ext4). `info` reports the
+detected storage layer in the Notes column and the `storage_layer`
+field in JSON output.
+
 All partition mounts are strictly read-only, guaranteeing the captured disk image remains immutable. While the container requires `--privileged` to manage loop devices, its access is bounded by the Docker Desktop Linux VM, safely isolating the macOS host.
 
 ---
@@ -274,16 +286,28 @@ Prints a table of all partitions, their filesystem type, size, and
 whether they can be mounted. Useful for understanding what is on the
 drive before deciding which partition to explore.
 
-**Example output:**
+**Example — home server (ext4 root):**
 
 ```text
-Image:  usb.img  (29.8 GB)
+Image:  /disk.img  (24.0 MB)
 Scheme: GPT
 
-  #   Filesystem   Size      Label              UUID          Notes
-  1   vfat         200 MB    EFI                2C3D-AF1B     [mountable]
-  2   ext4         29.0 GB   cloudimg-rootfs    a1b2c3d4      [mountable]
-  3   raw          8.0 MB    bootstate                        [raw: BOOT_ORDER=B A MACHINE_ID=...]
+  #    Filesystem  Size        Label                   UUID        Notes
+  1    vfat        4.0 MB      EFI                     13FD-321    [mountable]
+  2    ext4        19.0 MB     rootfs                  2ca3ba92    [mountable]
+
+2 mountable partitions found. Pass -p N to select one.
+```
+
+**Example — enterprise server (LUKS + LVM):**
+
+```text
+Image:  /disk.img  (48.0 MB)
+Scheme: GPT
+
+  #    Filesystem  Size        Label                   UUID        Notes
+  1    vfat        4.0 MB      EFI                     1492-B18    [mountable]
+  2    crypto_LUKS  43.0 MB     Linux LUKS+LVM          d9fd98d2    [mountable via luks]
 
 2 mountable partitions found. Pass -p N to select one.
 ```
@@ -292,6 +316,10 @@ The **Notes** column shows:
 
 - `[mountable]` — a filesystem driver is available; the partition can be
   used with `shell`, `copy`, `run`, etc.
+- `[mountable via lvm]`, `[mountable via luks]` — a storage abstraction
+  layer is detected. The layer is activated transparently before
+  mounting. LUKS partitions require `--luks-passphrase-file` or
+  `--luks-passphrase`. LVM partitions with multiple LVs require `--lv`.
 - `[raw: ...]` — no recognised filesystem (`blkid` found nothing).
   `usb-explore` runs a two-stage probe to extract a short description:
   first `file(1)` magic, then a null-terminated string scan. The extracted
@@ -301,8 +329,9 @@ The **Notes** column shows:
 
 `--json` emits machine-readable JSON for scripting. Each partition record
 includes `fstype` (`"raw"` when no filesystem is detected), `mountable`,
-`mountable_reason`, and — for raw partitions — `raw_hint` (the same
-content shown in the Notes column, or `null` when nothing was found).
+`mountable_reason`, `storage_layer` (`"lvm"`, `"luks"`, or
+`null`), and — for raw partitions — `raw_hint` (the same content shown
+in the Notes column, or `null` when nothing was found).
 
 ---
 
@@ -562,8 +591,42 @@ usb-explore shell -p 2       # use partition 2
 usb-explore copy -p 3 /etc ./etc-from-p3
 ```
 
-BIOS Boot, Linux swap, LVM physical volume, and raw (unrecognised
-filesystem) partitions are excluded from the mountable count.
+BIOS Boot, Linux swap, and raw (unrecognised filesystem) partitions are
+excluded from the mountable count. LVM and LUKS partitions are
+mountable — storage layers are activated automatically before mounting.
+
+### Storage layer options
+
+When a partition uses LVM or LUKS, additional flags may be
+needed:
+
+```bash
+# LVM: auto-selects the single LV; use --lv when multiple exist
+usb-explore shell -p 2
+usb-explore shell -p 2 --lv data
+
+# LUKS: read passphrase from a file (recommended — not exposed in
+# process args or docker inspect)
+usb-explore shell -p 2 --luks-passphrase-file /path/to/passphrase.txt
+
+# LUKS: supply passphrase directly (visible in docker inspect)
+usb-explore shell -p 2 --luks-passphrase 'my secret'
+
+# LUKS: use a binary key file
+usb-explore shell -p 2 --luks-key-file /path/to/keyfile
+
+# Stacked LUKS → LVM: both flags work together
+usb-explore shell -p 1 --luks-passphrase-file ~/pp.txt --lv root
+```
+
+> **Prefer `--luks-passphrase-file` for LUKS credentials.** The file is
+> bind-mounted read-only into the container and read there; the secret
+> never appears in the process argument list or the container
+> environment, so it is not visible to `ps`, `docker inspect`, or shell
+> history. `--luks-key-file` is equally safe for binary keys. Use
+> `--luks-passphrase` only for throwaway test images — the value is
+> passed as an environment variable and is visible in `docker inspect`
+> and process listings.
 
 ---
 
@@ -619,6 +682,23 @@ docker run --rm \
     bats/bats:1.13.0 \
     bats test/03-invocation.bats
 ```
+
+`generate.sh` is idempotent: it only builds fixtures that are missing,
+and accepts image basenames to build a specific one (for example
+`bash test/fixtures/generate.sh showcase-enterprise.img`).
+
+The `showcase-*` fixtures double as the README example images and are
+deliberately "nothing up the sleeves" — real, burnable disk images you
+could `dd` to a USB stick and mount on any Linux system:
+
+- **`showcase-home.img.gz`** is committed to the repository (<30 KB
+  gzipped). Because it is small, it ships as a genuine, fixed resource
+  rather than something generated on the fly; its contents are pinned by
+  `showcase-home.img.gz.sha256` and verified by the test suite.
+- **`showcase-enterprise.img`** (LUKS1 → LVM, ~50 MB) is far too large
+  to commit, so it is generated on demand the first time a test needs
+  it. Its LUKS layer uses random salts, so it is not bit-reproducible
+  and is intentionally not pinned.
 
 ---
 

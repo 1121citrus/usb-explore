@@ -11,31 +11,77 @@ set -euo pipefail
 SUBCOMMAND="${1}"
 shift
 
-# Source filesystem drivers
+# Source all drivers (filesystem and layer)
 DRIVER_DIR="/usr/local/lib/usb-explore/drivers"
 # shellcheck source=/dev/null
 for _drv in "${DRIVER_DIR}"/*.sh; do source "${_drv}"; done
-# Driver registry: each entry must have <name>_detect, <name>_mount, and
-# <name>_unmount functions defined in src/container/drivers/<name>.sh, plus
-# the corresponding package added to the Dockerfile.
-# To add a driver: append its name here and follow CONTRIBUTING.md.
+
+# Layer driver registry: each entry transforms a block device into a new
+# block device (e.g. LUKS decrypt, LVM activate).
+# Interface: <name>_detect, <name>_activate, <name>_deactivate.
+# Order matters: LUKS must be tried before LVM because LUKS→LVM is the
+# common stacking pattern.
+LAYER_DRIVERS=(luks lvm)
+
+# Filesystem driver registry: each entry mounts a block device.
+# Interface: <name>_detect, <name>_mount, <name>_unmount.
 # iso9660 must come AFTER vfat: it activates only for partitions with NO
 # partition-level filesystem, so vfat (EFI) is handled first and wins.
 FS_DRIVERS=(ext xfs vfat squashfs btrfs erofs iso9660)
 
+# Normalize an operator-provided run scope into a safe dm-name prefix.
+# This prevents one invocation from cleaning up another invocation's
+# mappings when multiple containers run concurrently.
+RUN_SCOPE="${USB_EXPLORE_RUN_SCOPE:-usb-explore-$$}"
+RUN_SCOPE="${RUN_SCOPE//[^[:alnum:]_.-]/-}"
+while [[ "${RUN_SCOPE}" == -* ]]; do RUN_SCOPE="${RUN_SCOPE#-}"; done
+while [[ "${RUN_SCOPE}" == *- ]]; do RUN_SCOPE="${RUN_SCOPE%-}"; done
+[[ -n "${RUN_SCOPE}" ]] || RUN_SCOPE="usb-explore-$$"
+USB_EXPLORE_DM_SCOPE_PREFIX="${RUN_SCOPE:0:48}"
+export USB_EXPLORE_DM_SCOPE_PREFIX
+
 # ---------------------------------------------------------------------------
-# Loop device tracking (populated by attach_partition)
+# Loop device and layer tracking
 # ---------------------------------------------------------------------------
 
 PART_LOOP=""    # partition-specific loop device, set by attach_partition
+CLEANUP_STACK=()  # LIFO stack of layer deactivation commands
+
+# push_cleanup — record a deactivation command for LIFO unwinding.
+# Args: $1 = command string to eval during cleanup
+push_cleanup() {
+    CLEANUP_STACK+=("$1")
+}
 
 cleanup() {
     local rc=$?
     umount /mnt/part 2>/dev/null || true
+    # Unwind layer stack in reverse order
+    local i
+    for (( i=${#CLEANUP_STACK[@]}-1; i>=0; i-- )); do
+        eval "${CLEANUP_STACK[i]}" 2>/dev/null || true
+    done
     [[ -n "${PART_LOOP}" ]] && losetup --detach "${PART_LOOP}" 2>/dev/null || true
     exit "${rc}"
 }
 trap cleanup EXIT INT TERM
+
+# ---------------------------------------------------------------------------
+# Stale device-mapper cleanup
+# ---------------------------------------------------------------------------
+
+# _cleanup_stale_dm — remove stale dm mappings from this run scope only.
+# Never touches mappings outside USB_EXPLORE_DM_SCOPE_PREFIX.
+# Args: none
+# Returns: 0 (best-effort, never fails the caller)
+_cleanup_stale_dm() {
+    local _dm_name
+    while IFS= read -r _dm_name; do
+        [[ -n "${_dm_name}" ]] || continue
+        [[ "${_dm_name}" == "${USB_EXPLORE_DM_SCOPE_PREFIX}"-* ]] || continue
+        dmsetup remove --force "${_dm_name}" 2>/dev/null || true
+    done < <(dmsetup ls 2>/dev/null | awk '{print $1}')
+}
 
 # ---------------------------------------------------------------------------
 # Partition loop helpers
@@ -43,12 +89,21 @@ trap cleanup EXIT INT TERM
 
 # attach_partition — create a read-only loop device for one partition.
 # Uses sfdisk byte-offset arithmetic so no kernel partition-scan is needed.
+# Detaches any stale loop devices left by previous container runs first;
+# the Docker Desktop kernel shares the loop table across containers, so
+# leftover loops with the same PV UUID confuse LVM's duplicate detection.
 # Args:   $1 = 1-based partition number
 # Side effect: sets global PART_LOOP
 # Returns: 0 on success; exits 5 on out-of-range partition number
 attach_partition() {
     local partnum="${1}"
     local sfdisk_json sector_size n_parts start size
+
+    # Detach stale loop devices associated with /disk.img from prior runs
+    local _stale
+    while IFS= read -r _stale; do
+        [[ -n "${_stale}" ]] && losetup --detach "${_stale}" 2>/dev/null || true
+    done < <(losetup --associated /disk.img 2>/dev/null | awk -F: '{print $1}')
 
     sfdisk_json=$(sfdisk --json /disk.img 2>/dev/null)
     sector_size=$(echo "${sfdisk_json}" | jq -r '.partitiontable.sectorsize // 512')
@@ -134,12 +189,39 @@ mount_partition() {
 
     attach_partition "${USB_PARTITION:?USB_PARTITION is not set}"
 
+    # Clear orphaned dm mappings from this invocation scope only.
+    _cleanup_stale_dm
+
+    # Layer activation loop: repeatedly probe the current device for
+    # storage abstraction layers (LUKS, LVM). Each matched layer
+    # transforms the device into a new one. The loop terminates when no
+    # layer driver matches, then filesystem drivers take over.
+    local current_device="${PART_LOOP}"
+    local max_depth=5
+    local depth=0
+
+    while (( depth < max_depth )); do
+        local layer_matched=false
+        for drv in "${LAYER_DRIVERS[@]}"; do
+            if "${drv}_detect" "${current_device}"; then
+                local new_device
+                new_device=$("${drv}_activate" "${current_device}")
+                push_cleanup "${drv}_deactivate"
+                current_device="${new_device}"
+                layer_matched=true
+                break
+            fi
+        done
+        [[ "${layer_matched}" == true ]] || break
+        (( depth++ )) || true
+    done
+
     local fstype
-    fstype=$(blkid -o value -s TYPE "${PART_LOOP}" 2>/dev/null || echo "unknown")
+    fstype=$(blkid -o value -s TYPE "${current_device}" 2>/dev/null || echo "unknown")
 
     for drv in "${FS_DRIVERS[@]}"; do
-        if "${drv}_detect" "${PART_LOOP}"; then
-            "${drv}_mount" "${PART_LOOP}" /mnt/part
+        if "${drv}_detect" "${current_device}"; then
+            "${drv}_mount" "${current_device}" /mnt/part
             return 0
         fi
     done

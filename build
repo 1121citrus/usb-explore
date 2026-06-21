@@ -573,6 +573,8 @@ if [[ "${LINT}" == "true" ]]; then
             /src/src/container/drivers/xfs.sh \
             /src/src/container/drivers/vfat.sh \
             /src/src/container/drivers/iso9660.sh \
+            /src/src/container/drivers/luks.sh \
+            /src/src/container/drivers/lvm.sh \
             /src/bin/install \
             /src/install/homebrew/test-formula \
             /src/test/runtime-compat)
