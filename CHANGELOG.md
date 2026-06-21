@@ -11,6 +11,45 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Storage abstraction layer pipeline (`src/container/dispatch.sh`): block
+  devices are now probed for stacked storage layers (LUKS, LVM) before a
+  filesystem driver runs. Each matched layer transforms the device into a
+  new device, looping until no layer matches, so stacks such as
+  LUKS → LVM → ext4 are mounted transparently. Layer drivers expose a
+  `<name>_detect` / `<name>_activate` / `<name>_deactivate` interface and
+  are unwound in LIFO order on exit.
+- `lvm` layer driver (`src/container/drivers/lvm.sh`): detects LVM2
+  physical volumes, activates the volume group read-only, and selects a
+  logical volume. Auto-selects when exactly one LV exists; otherwise the
+  new `--lv NAME` global flag picks one and an error lists the available
+  LVs. Adds the `lvm2` package to the Dockerfile.
+- `luks` layer driver (`src/container/drivers/luks.sh`): detects
+  `crypto_LUKS` partitions (LUKS1 and LUKS2) and opens them read-only.
+  Credentials come, in order of preference, from `--luks-passphrase-file`
+  (read inside the container; never exposed in process args or env vars —
+  the recommended option), `--luks-key-file` (binary key file), or
+  `--luks-passphrase` (string; discouraged — visible in `docker inspect`).
+  A TTY prompt is used when no credential is supplied interactively. Adds
+  the `cryptsetup-bin` package to the Dockerfile.
+- `info` / `info --json`: reports storage abstraction layers. A new
+  `storage_layer` field (`"luks"`, `"lvm"`, or `null`) is added to each
+  JSON partition object, LVM physical volumes and `crypto_LUKS`
+  partitions are now reported as mountable, and the human table Notes
+  column shows `[mountable via luks]` / `[mountable via lvm]`.
+- Scoped stale device-mapper cleanup (`_cleanup_stale_dm` in
+  `src/container/dispatch.sh`): removes only usb-explore's own orphaned
+  LUKS/LVM mappings left in the shared Docker Desktop kernel dm table by
+  prior container runs, in dependency order, before re-activating.
+- `lvm.img`, `luks.img`, and `luks-lvm.img` test fixtures plus the
+  `showcase-home.img` / `showcase-enterprise.img` showcase fixtures
+  (`test/fixtures/generate.sh`). Tests cover LVM activation, LUKS1/LUKS2
+  open, the LUKS → LVM stack, wrong-passphrase and missing-credential
+  error paths, passphrase-file delivery, storage-layer reporting in
+  `info`, and an image binary / size budget check.
+- `test/fixtures/showcase-home.img.gz`: a small (<30 KB) committed,
+  real disk image used by the README examples. It is a genuine, burnable
+  image rather than a generated artifact, demonstrating output with
+  "nothing up the sleeves".
 - `erofs` filesystem driver (`src/container/drivers/erofs.sh`): HAOS
   `hassos-system0` / `hassos-system1` partitions use erofs (Enhanced
   Read-Only File System). The new driver adds detection, read-only mount,
