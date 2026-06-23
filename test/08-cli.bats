@@ -970,3 +970,53 @@ EOF
 @test "rw: LUKS driver uses LUKS_RO_FLAG not hardcoded --readonly" {
     run ! grep -E 'cryptsetup open --readonly' "${LUKS_DRIVER}"
 }
+
+# ---------------------------------------------------------------------------
+# edit subcommand — CLI flag tests
+# ---------------------------------------------------------------------------
+
+@test "cli: 'edit' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" --image /nonexistent.img edit --yes
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'edit' --yes flag is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img edit --yes
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'edit' -y short flag is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img edit -y
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'edit' aborts on empty input without --yes" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-edit-test-XXXXXX)
+    run bash -c "echo n | bash '${SCRIPT}' --image '${tmp}' edit"
+    rm -f "${tmp}" "${tmp}.pre-edit"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Aborted"* ]]
+}
+
+@test "cli: 'edit' creates .pre-edit backup file" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-edit-test-XXXXXX)
+    echo "test-content" > "${tmp}"
+    # Abort immediately (no Docker needed for backup creation)
+    run bash -c "echo n | bash '${SCRIPT}' --image '${tmp}' edit"
+    [ -f "${tmp}.pre-edit" ]
+    # Backup content matches original
+    diff -q "${tmp}" "${tmp}.pre-edit" >/dev/null
+    rm -f "${tmp}" "${tmp}.pre-edit"
+}
+
+@test "cli: 'edit' uses cp -c for APFS backup" {
+    grep -q 'cp -c' "${SCRIPT}"
+}
+
+@test "cli: --help lists edit subcommand" {
+    run bash "${SCRIPT}" --help
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"edit"* ]]
+}

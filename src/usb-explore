@@ -41,6 +41,13 @@
 #             Diff <image-path> (within the partition) against <ref-path>
 #             on the host. Exit code: 0=identical, 1=different, 2=error.
 #
+#   edit    [-i|--image PATH] [-p|--partition N] [--yes] [--] [cmd...]
+#             Mount read-write and run an interactive shell or command.
+#             Creates an APFS reflink backup (.pre-edit) before the
+#             first write session. Prompts for confirmation unless
+#             --yes is given. Not supported on squashfs, erofs, or
+#             iso9660 (inherently read-only).
+#
 #   find    [-i|--image PATH] [-p|--partition N]
 #             [--grep PATTERN] [NAME-GLOB]
 #             Search the partition. NAME-GLOB finds files by name
@@ -150,6 +157,7 @@ LV_NAME=""
 LUKS_PASSPHRASE=""
 LUKS_PASSPHRASE_FILE=""
 LUKS_KEY_FILE=""
+RW_MODE=false
 DEBUG=false
 CONTAINER_NAME="usb-explore-$$"
 CONTAINER_STARTED=false
@@ -256,15 +264,22 @@ resolve_partition() {
 # Reads globals: IMAGE_FILE, IMAGE_REF, CONTAINER_NAME, DEBUG,
 #   LV_NAME, LUKS_PASSPHRASE, LUKS_KEY_FILE
 run_container() {
+    local disk_mount_mode="ro"
+    [[ "${RW_MODE}" == true ]] && disk_mount_mode="rw"
+
     local docker_args=(
         run
         --rm
         --privileged
         --name "${CONTAINER_NAME}"
-        -v "$(realpath "${IMAGE_FILE}"):/disk.img:ro"
+        -v "$(realpath "${IMAGE_FILE}"):/disk.img:${disk_mount_mode}"
         -e "USB_PARTITION=${PARTITION:-}"
         -e "USB_EXPLORE_RUN_SCOPE=${CONTAINER_NAME}"
     )
+
+    # Read-write mode
+    [[ "${RW_MODE}" == true ]] && \
+        docker_args+=(-e "USB_EXPLORE_RW=true")
 
     # Storage layer credentials and selection
     [[ -n "${LV_NAME}" ]] && \
@@ -767,6 +782,87 @@ do_diff() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: edit
+# ---------------------------------------------------------------------------
+
+# do_edit — mount read-write with automatic APFS backup.
+# Args:
+#   [--yes]            skip confirmation prompt
+#   [--] [cmd args...] run a command instead of an interactive shell
+# Returns:
+#   Exit code from the shell or command.
+do_edit() {
+    local yes=false
+    while [[ $# -gt 0 && "${1}" != "--" ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            --yes|-y) yes=true ;;
+            -*) die "Unknown edit option: ${1}" ;;
+            *) break ;;
+        esac
+        shift
+    done
+    [[ "${1:-}" == "--" ]] && shift
+
+    check_image_file
+
+    # APFS reflink backup before any Docker operations
+    local backup="${IMAGE_FILE}.pre-edit"
+    if [[ ! -f "${backup}" ]]; then
+        log "Creating backup: ${backup}"
+        cp -c "${IMAGE_FILE}" "${backup}" 2>/dev/null \
+            || cp "${IMAGE_FILE}" "${backup}"
+    else
+        log "Backup already exists: ${backup}"
+    fi
+
+    # Confirmation
+    if [[ "${yes}" == false ]]; then
+        printf "usb-explore: This will modify %s. Continue? [y/N] " \
+            "${IMAGE_FILE}" >&2
+        local answer="n"
+        read -r answer || answer="n"
+        [[ "${answer}" =~ ^[Yy]$ ]] || { log "Aborted."; exit 0; }
+    fi
+
+    check_docker
+    ensure_image
+    resolve_partition
+
+    RW_MODE=true
+
+    if [[ $# -gt 0 ]]; then
+        # Rewrite leading-/ arguments to /mnt/part<path>
+        local rewritten=()
+        for arg in "$@"; do
+            if [[ "${arg}" == /* ]]; then
+                rewritten+=("/mnt/part${arg}")
+            else
+                rewritten+=("${arg}")
+            fi
+        done
+        set_tty_flags
+        local rc=0
+        run_container \
+            "${TTY_FLAGS[@]}" \
+            "${IMAGE_REF}" run "${rewritten[@]}" || rc=$?
+        return "${rc}"
+    else
+        local rc=0
+        run_container \
+            -i -t \
+            "${IMAGE_REF}" shell || rc=$?
+        if [[ "${rc}" -ne 130 && -t 2 ]]; then
+            printf '\033[1A\033[2K\r' >&2
+        fi
+        [[ "${rc}" -eq 130 ]] && return 0
+        return "${rc}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: find
 # ---------------------------------------------------------------------------
 
@@ -1147,7 +1243,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        archive|browse|build|capture|clean|copy|diff|find|hash|info|mount|run|serve|shell|unmount)
+        archive|browse|build|capture|clean|copy|diff|edit|find|hash|info|mount|run|serve|shell|unmount)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -1167,6 +1263,7 @@ case "${SUBCOMMAND}" in
     clean)   do_clean   "$@" ;;
     copy)    do_copy    "$@" ;;
     diff)    do_diff    "$@" ;;
+    edit)    do_edit    "$@" ;;
     find)    do_find    "$@" ;;
     hash)    do_hash    "$@" ;;
     info)    do_info    "$@" ;;
