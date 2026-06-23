@@ -729,6 +729,13 @@ do_clean() {
 
     rm -f -- "${IMAGE_FILE}"
     log "Removed ${IMAGE_FILE} (${size})"
+
+    # Remove the .pre-edit backup if it exists
+    local backup="${IMAGE_FILE}.pre-edit"
+    if [[ -f "${backup}" ]]; then
+        rm -f -- "${backup}"
+        log "Removed ${backup}"
+    fi
 }
 
 # _write_to_volume — write the disk image back to a USB device or file.

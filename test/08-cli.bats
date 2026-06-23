@@ -356,6 +356,16 @@ SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
     [[ ! -f "${tmp}" ]]
 }
 
+@test "cli: 'clean' removes .pre-edit backup alongside image" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    touch "${tmp}.pre-edit"
+    run bash "${SCRIPT}" --image "${tmp}" clean --yes
+    [ "${status}" -eq 0 ]
+    [[ ! -f "${tmp}" ]]
+    [[ ! -f "${tmp}.pre-edit" ]]
+}
+
 @test "cli: 'clean' exits 4 when image file is missing" {
     run bash "${SCRIPT}" --image /nonexistent/no.img clean --yes
     [ "${status}" -eq 4 ]
