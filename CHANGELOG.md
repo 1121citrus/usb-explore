@@ -11,6 +11,65 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.6.0] — 2026-06-23
+
+### Added
+
+- `mount` subcommand: mounts a partition as a read-only SMB volume in
+  macOS Finder. No `sudo` required — Finder handles the SMB mount via
+  the native NetFS framework. Supports `--port` for concurrent sessions
+  and `--no-open` for headless/SSH environments. Each session uses a
+  unique share name derived from the shell PID.
+- `unmount` subcommand: ejects all usb-explore SMB volumes under
+  `/Volumes/`. Equivalent to ejecting from Finder.
+- `edit` subcommand: mounts the partition read-write for emergency
+  repair or config changes. Creates an instant APFS reflink backup
+  (`.pre-edit`) before the first write session. Prompts for
+  confirmation unless `--yes` is given. Supports both interactive shell
+  mode and command mode (`edit -- cmd args`).
+- `--rw` flag on `shell` and `run`: power-user write access without
+  backup or confirmation.
+- `clean --update-volume`: writes the image back to a block device
+  before removing it (inverse of `capture`). Requires typing `YES` to
+  confirm. Post-write SHA-256 verification is on by default (reads the
+  device back and compares byte-for-byte). `--skip-verify` bypasses the
+  read-back. `--dry-run` prints the `dd` command without executing.
+  `--force` allows a plain file as the target (bypasses `/dev/disk*`
+  validation), enabling end-to-end testing without a physical device.
+- `clean` removes `.pre-edit` backup files alongside the image.
+- `samba` package added to the Docker image for SMB mount support.
+- Read-write mode infrastructure: `USB_EXPLORE_RW` environment variable
+  propagates through `MOUNT_MODE`, `LOOP_RO_FLAG`, and `LUKS_RO_FLAG`
+  globals. Each filesystem and layer driver respects these conditionally.
+  Inherently read-only formats (squashfs, erofs, iso9660) reject
+  `--rw`/`edit` with a clear error.
+- Shell prompt includes `RW` tag when in write mode.
+- Portable `_sha256` helper (macOS `shasum` / Linux `sha256sum`).
+
+### Changed
+
+- Documentation broadened from USB-specific to any disk image. Opening
+  paragraph, quick start, architecture, capture, clean, info, and
+  partition selection sections updated. Quick start now has two entry
+  paths: "already have a disk image" and "capturing from a physical
+  device".
+- Security considerations rewritten for the RO/RW model: read-only by
+  default, write mode is destructive (journal replay, APFS backup),
+  `--update-volume` overwrites block devices (YES confirmation, SHA-256
+  verification).
+- `info` section adds an EC2/partitionless example (`Scheme: NONE`).
+- `shell` and `run` SYNOPSIS blocks now document `--rw`.
+- `clean` SYNOPSIS block now documents `--force`, `--skip-verify`, and
+  `--dry-run`.
+
+### Fixed
+
+- Partitionless raw filesystem images (common EC2 volume exports) are
+  now detected and mountable as a single pseudo-partition.
+- `clean` now removes `.pre-edit` backup files alongside the image.
+
+---
+
 ## [1.5.0] — 2026-06-21
 
 ### Added
@@ -416,6 +475,7 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Docker container; no host kernel extensions required.
 
 [Unreleased]: https://github.com/1121citrus/usb-explore/compare/v1.5.0...HEAD
+[1.6.0]: https://github.com/1121citrus/usb-explore/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/1121citrus/usb-explore/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/1121citrus/usb-explore/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/1121citrus/usb-explore/compare/v1.3.0...v1.3.1
