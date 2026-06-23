@@ -22,6 +22,18 @@ info_json() {
         "${IMAGE}" info --json
 }
 
+# make_whole_disk_ext4 — create a partitionless ext4 image at path.
+# Args: $1 = absolute host path to image file
+make_whole_disk_ext4() {
+    local img_path="${1}"
+    truncate -s 64M "${img_path}"
+    docker run --rm --privileged \
+        -v "${img_path}:/work.img" \
+        --entrypoint bash \
+        "${IMAGE}" \
+        -lc 'mkfs.ext4 -q -L ec2raw /work.img'
+}
+
 # ---------------------------------------------------------------------------
 # single-ext4.img
 # ---------------------------------------------------------------------------
@@ -371,6 +383,28 @@ info_json() {
 # ---------------------------------------------------------------------------
 # Blank image (no partition table)
 # ---------------------------------------------------------------------------
+
+@test "discovery: whole-disk ext4 image has one mountable pseudo-partition" {
+    local raw json count fstype mountable label
+    raw=$(mktemp /tmp/usb-whole-ext4-XXXXXX)
+    make_whole_disk_ext4 "${raw}"
+
+    json=$(docker run --rm --privileged \
+        -v "${raw}:/disk.img:ro" \
+        "${IMAGE}" info --json)
+
+    label=$(jq_from_json "${json}" '.label')
+    count=$(jq_from_json "${json}" '.partitions | length')
+    fstype=$(jq_from_json "${json}" '.partitions[0].fstype')
+    mountable=$(jq_from_json "${json}" '.partitions[0].mountable')
+
+    rm -f "${raw}"
+
+    [ "${label}" = "none" ]
+    [ "${count}" -eq 1 ]
+    [ "${fstype}" = "ext4" ]
+    [ "${mountable}" = "true" ]
+}
 
 @test "discovery: blank image exits non-zero with a clear error message" {
     local blank

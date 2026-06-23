@@ -154,10 +154,109 @@ attach_partition() {
     done
 }
 
+# attach_whole_disk — create a read-only loop device for /disk.img.
+# Used when no partition table exists and the filesystem starts at byte 0.
+# Side effect: sets global PART_LOOP
+# Returns: 0 on success; exits 5 when no loop device is available
+attach_whole_disk() {
+    # Detach stale loop devices associated with /disk.img from prior runs
+    local _stale
+    while IFS= read -r _stale; do
+        [[ -n "${_stale}" ]] && losetup --detach "${_stale}" 2>/dev/null || true
+    done < <(losetup --associated /disk.img 2>/dev/null | awk -F: '{print $1}')
+
+    local candidate attempt
+    candidate=$(losetup --find 2>/dev/null || true)
+    if [[ -n "${candidate}" && ! -b "${candidate}" ]]; then
+        local num="${candidate#/dev/loop}"
+        mknod "${candidate}" b 7 "${num}" 2>/dev/null || true
+    fi
+
+    for attempt in 1 2 3 4 5; do
+        PART_LOOP=$(losetup --find --show --read-only /disk.img 2>/dev/null) && break
+        [[ "${attempt}" -lt 5 ]] || {
+            echo "error: no loop device available after ${attempt} attempts." >&2
+            exit 5
+        }
+        sleep "0.${attempt}"
+        candidate=$(losetup --find 2>/dev/null || true)
+        if [[ -n "${candidate}" && ! -b "${candidate}" ]]; then
+            local num="${candidate#/dev/loop}"
+            mknod "${candidate}" b 7 "${num}" 2>/dev/null || true
+        fi
+    done
+}
+
+# mount_device_with_layers — activate storage layers (LUKS/LVM) and mount
+# using the first matching filesystem driver.
+# Args: $1 = initial block device
+# Returns: 0 on success; exits 5 on unsupported/unrecognised filesystem
+mount_device_with_layers() {
+    local current_device="${1}"
+
+    # Layer activation loop: repeatedly probe the current device for
+    # storage abstraction layers (LUKS, LVM). Each matched layer
+    # transforms the device into a new one. The loop terminates when no
+    # layer driver matches, then filesystem drivers take over.
+    local max_depth=5
+    local depth=0
+
+    while (( depth < max_depth )); do
+        local layer_matched=false
+        for drv in "${LAYER_DRIVERS[@]}"; do
+            if "${drv}_detect" "${current_device}"; then
+                local new_device
+                new_device=$("${drv}_activate" "${current_device}")
+                push_cleanup "${drv}_deactivate"
+                current_device="${new_device}"
+                layer_matched=true
+                break
+            fi
+        done
+        [[ "${layer_matched}" == true ]] || break
+        (( depth++ )) || true
+    done
+
+    local fstype
+    fstype=$(blkid -o value -s TYPE "${current_device}" 2>/dev/null || echo "unknown")
+
+    for drv in "${FS_DRIVERS[@]}"; do
+        if "${drv}_detect" "${current_device}"; then
+            "${drv}_mount" "${current_device}" /mnt/part
+            return 0
+        fi
+    done
+
+    case "${fstype}" in
+        unknown|"")
+            echo "error: selected image region contains no" >&2
+            echo "       recognised filesystem." >&2 ;;
+        *)
+            echo "error: no driver found for filesystem '${fstype}'." >&2 ;;
+    esac
+    exit 5
+}
+
 # mount_partition — attach and mount the selected partition read-only.
 # Reads USB_PARTITION from the environment.
 # Returns: 0 on success; exits 5 on unsupported or unrecognised filesystem
 mount_partition() {
+    # Whole-disk fallback: when no partition table exists, treat /disk.img as
+    # a single pseudo-partition (partition 1) and mount it directly.
+    if ! sfdisk --json /disk.img >/dev/null 2>&1; then
+        if [[ "${USB_PARTITION}" -ne 1 ]]; then
+            echo "error: partition ${USB_PARTITION} does not exist" \
+                 "(image has 1 pseudo-partition)." >&2
+            echo "       Run 'usb-explore info' to inspect the image." >&2
+            exit 5
+        fi
+
+        attach_whole_disk
+        _cleanup_stale_dm
+        mount_device_with_layers "${PART_LOOP}"
+        return 0
+    fi
+
     # Pre-check: for xorriso ISO data regions (GPT attribute GUID:60), the
     # iso9660 filesystem starts at disk byte 0 (before any partition offset).
     # Creating a partition loop device and THEN a full-disk loop for the same
@@ -192,48 +291,7 @@ mount_partition() {
     # Clear orphaned dm mappings from this invocation scope only.
     _cleanup_stale_dm
 
-    # Layer activation loop: repeatedly probe the current device for
-    # storage abstraction layers (LUKS, LVM). Each matched layer
-    # transforms the device into a new one. The loop terminates when no
-    # layer driver matches, then filesystem drivers take over.
-    local current_device="${PART_LOOP}"
-    local max_depth=5
-    local depth=0
-
-    while (( depth < max_depth )); do
-        local layer_matched=false
-        for drv in "${LAYER_DRIVERS[@]}"; do
-            if "${drv}_detect" "${current_device}"; then
-                local new_device
-                new_device=$("${drv}_activate" "${current_device}")
-                push_cleanup "${drv}_deactivate"
-                current_device="${new_device}"
-                layer_matched=true
-                break
-            fi
-        done
-        [[ "${layer_matched}" == true ]] || break
-        (( depth++ )) || true
-    done
-
-    local fstype
-    fstype=$(blkid -o value -s TYPE "${current_device}" 2>/dev/null || echo "unknown")
-
-    for drv in "${FS_DRIVERS[@]}"; do
-        if "${drv}_detect" "${current_device}"; then
-            "${drv}_mount" "${current_device}" /mnt/part
-            return 0
-        fi
-    done
-
-    case "${fstype}" in
-        unknown|"")
-            echo "error: partition ${USB_PARTITION} contains no" >&2
-            echo "       recognised filesystem." >&2 ;;
-        *)
-            echo "error: no driver found for filesystem '${fstype}'." >&2 ;;
-    esac
-    exit 5
+    mount_device_with_layers "${PART_LOOP}"
 }
 
 # ---------------------------------------------------------------------------

@@ -160,36 +160,115 @@ probe_raw_hint() {
     [[ -n "${strings}" ]] && echo "${strings}" || true
 }
 
-# ---------------------------------------------------------------------------
-# Read partition table
-# ---------------------------------------------------------------------------
-
-SFDISK_JSON=$(sfdisk --json /disk.img 2>/dev/null) || {
-    printf 'info: no recognised partition table in the disk image\n' >&2
-    printf 'info: the image may be unformatted, blank, or use an unsupported scheme\n' >&2
-    exit 1
+# disk_image_size_bytes — return the size of /disk.img in bytes.
+# Returns: 0; writes byte count to stdout
+disk_image_size_bytes() {
+    stat -c '%s' /disk.img 2>/dev/null || wc -c < /disk.img
 }
-LABEL=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.label')
-SECTOR_SIZE=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.sectorsize // 512')
 
-IMAGE_SIZE_SECTORS=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.lastlba + 1')
-IMAGE_SIZE_BYTES=$(( IMAGE_SIZE_SECTORS * SECTOR_SIZE ))
-IMAGE_SIZE_HUMAN=$(bytes_human "${IMAGE_SIZE_BYTES}")
+# classify_whole_disk — classify a filesystem that starts at byte 0.
+# Args: $1 = blkid TYPE value
+# Sets globals: MOUNTABLE, MOUNTABLE_REASON, STORAGE_LAYER
+classify_whole_disk() {
+    local fstype="${1}"
+    MOUNTABLE=true
+    MOUNTABLE_REASON="null"
+    STORAGE_LAYER=""
 
-# Detect disk-level filesystem before the partition loop so that ISO data
-# regions can inherit the disk fstype (e.g. iso9660) during classification.
-DISK_FSTYPE=$(disk_level_fstype)
+    case "${fstype}" in
+        crypto_LUKS) MOUNTABLE=true; STORAGE_LAYER="luks"; return ;;
+        LVM2_member) MOUNTABLE=true; STORAGE_LAYER="lvm"; return ;;
+        ext2|ext3|ext4|xfs|vfat|squashfs|btrfs|erofs|iso9660) return ;;
+        swap|"")
+            MOUNTABLE=false
+            MOUNTABLE_REASON="no recognised filesystem"
+            return ;;
+        *)
+            MOUNTABLE=false
+            MOUNTABLE_REASON="no driver found for filesystem '${fstype}'"
+            return ;;
+    esac
+}
+
+# whole_disk_partition_json — synthesize a single pseudo-partition record
+# when the image has no partition table but has a filesystem at byte 0.
+# Args: $1 = sector size, $2 = image size bytes, $3 = human size, $4 = fstype
+# Returns: 0; writes JSON array with one partition-like record to stdout
+whole_disk_partition_json() {
+    local sector_size="${1}" image_size_bytes="${2}" image_size_human="${3}" fstype="${4}"
+    local fs_label uuid uuid_short size_sectors
+
+    fs_label=$(blkid --probe -o value -s LABEL /disk.img 2>/dev/null || true)
+    uuid=$(blkid --probe -o value -s UUID /disk.img 2>/dev/null || true)
+    uuid_short="${uuid:0:8}"
+    size_sectors=$(( image_size_bytes / sector_size ))
+
+    classify_whole_disk "${fstype}"
+
+    jq -n \
+        --argjson num     "1" \
+        --arg     node    "/disk.img" \
+        --argjson start   "0" \
+        --argjson size_s  "${size_sectors}" \
+        --argjson size_b  "${image_size_bytes}" \
+        --arg     size_h  "${image_size_human}" \
+        --arg     type    "00" \
+        --arg     tname   "Whole-disk filesystem" \
+        --arg     fstype  "${fstype}" \
+        --arg     label   "${fs_label}" \
+        --arg     uuid    "${uuid}" \
+        --arg     uuid_s  "${uuid_short}" \
+        --argjson mount   "${MOUNTABLE}" \
+        --arg     mreason "${MOUNTABLE_REASON}" \
+        --arg     slayer  "${STORAGE_LAYER}" \
+        '[{
+            number:           $num,
+            node:             $node,
+            start_sector:     $start,
+            size_sectors:     $size_s,
+            size_bytes:       $size_b,
+            size_human:       $size_h,
+            type_id:          $type,
+            type_name:        $tname,
+            fstype:           (if $fstype == "" then "raw" else $fstype end),
+            raw_hint:         null,
+            storage_layer:    (if $slayer == "" then null else $slayer end),
+            label:            $label,
+            uuid:             $uuid,
+            uuid_short:       $uuid_s,
+            mountable:        $mount,
+            mountable_reason: (if $mreason == "null" then null else $mreason end)
+        }]'
+}
 
 # ---------------------------------------------------------------------------
-# Build partition records
+# Read partition table (or synthesize a whole-disk filesystem record)
 # ---------------------------------------------------------------------------
 
-PARTITIONS_JSON="[]"
-PART_COUNT=$(echo "${SFDISK_JSON}" | jq '.partitiontable.partitions | length')
+SFDISK_JSON=$(sfdisk --json /disk.img 2>/dev/null || true)
 
-for (( idx=0; idx<PART_COUNT; idx++ )); do
-    PART_NUM=$(( idx + 1 ))
-    PART_JSON=$(echo "${SFDISK_JSON}" | jq -c ".partitiontable.partitions[${idx}]")
+if [[ -n "${SFDISK_JSON}" ]]; then
+    LABEL=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.label')
+    SECTOR_SIZE=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.sectorsize // 512')
+
+    IMAGE_SIZE_SECTORS=$(echo "${SFDISK_JSON}" | jq -r '.partitiontable.lastlba + 1')
+    IMAGE_SIZE_BYTES=$(( IMAGE_SIZE_SECTORS * SECTOR_SIZE ))
+    IMAGE_SIZE_HUMAN=$(bytes_human "${IMAGE_SIZE_BYTES}")
+
+    # Detect disk-level filesystem before the partition loop so that ISO data
+    # regions can inherit the disk fstype (e.g. iso9660) during classification.
+    DISK_FSTYPE=$(disk_level_fstype)
+
+    # -----------------------------------------------------------------------
+    # Build partition records from sfdisk output
+    # -----------------------------------------------------------------------
+
+    PARTITIONS_JSON="[]"
+    PART_COUNT=$(echo "${SFDISK_JSON}" | jq '.partitiontable.partitions | length')
+
+    for (( idx=0; idx<PART_COUNT; idx++ )); do
+        PART_NUM=$(( idx + 1 ))
+        PART_JSON=$(echo "${SFDISK_JSON}" | jq -c ".partitiontable.partitions[${idx}]")
 
     NODE=$(echo "${PART_JSON}"  | jq -r '.node')
     START=$(echo "${PART_JSON}" | jq -r '.start')
@@ -274,9 +353,24 @@ for (( idx=0; idx<PART_COUNT; idx++ )); do
             mountable_reason: (if $mreason == "null" then null else $mreason end)
         }')
 
-    PARTITIONS_JSON=$(echo "${PARTITIONS_JSON}" \
-        | jq --argjson r "${RECORD}" '. + [$r]')
-done
+        PARTITIONS_JSON=$(echo "${PARTITIONS_JSON}" \
+            | jq --argjson r "${RECORD}" '. + [$r]')
+    done
+else
+    DISK_FSTYPE=$(disk_level_fstype)
+    if [[ -z "${DISK_FSTYPE}" ]]; then
+        printf 'info: no recognised partition table in the disk image\n' >&2
+        printf 'info: the image may be unformatted, blank, or use an unsupported scheme\n' >&2
+        exit 1
+    fi
+
+    LABEL="none"
+    SECTOR_SIZE=512
+    IMAGE_SIZE_BYTES=$(disk_image_size_bytes)
+    IMAGE_SIZE_HUMAN=$(bytes_human "${IMAGE_SIZE_BYTES}")
+    PARTITIONS_JSON=$(whole_disk_partition_json \
+        "${SECTOR_SIZE}" "${IMAGE_SIZE_BYTES}" "${IMAGE_SIZE_HUMAN}" "${DISK_FSTYPE}")
+fi
 
 FULL_JSON=$(jq -n \
     --arg     image   "/disk.img" \

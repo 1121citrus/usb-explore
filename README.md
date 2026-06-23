@@ -146,7 +146,7 @@ a JSON summary with the result.
 Because Docker Desktop for macOS virtualizes Linux but does not expose raw host block devices (e.g., `/dev/disk4`) to containers, direct mounting of a USB drive is not possible. `usb-explore` uses a two-stage approach to bypass this limitation:
 
 1. **Host capture**: A native macOS script uses `dd` to copy the physical USB drive to a sparse image file block-by-block.
-2. **Container isolation**: The image file is bind-mounted into a minimal Ubuntu-based Docker container. The container uses standard Linux utilities (`sfdisk`, `losetup`, `blkid`, `mount`) to parse the partition table and attach loop devices.
+2. **Container isolation**: The image file is bind-mounted into a minimal Ubuntu-based Docker container. The container uses standard Linux utilities (`sfdisk`, `losetup`, `blkid`, `mount`) to parse the partition table and attach loop devices. If no partition table is present but a filesystem exists at byte 0 (common for EC2 raw volume exports), `usb-explore` treats the image as a single pseudo-partition.
 
 Filesystem support is implemented via a modular driver system inside the container:
 
@@ -285,6 +285,10 @@ usb-explore info [-i usb.img] [--json]
 Prints a table of all partitions, their filesystem type, size, and
 whether they can be mounted. Useful for understanding what is on the
 drive before deciding which partition to explore.
+
+If the image has no partition table but contains a whole-disk filesystem,
+`info` reports `Scheme: NONE` and exposes one mountable pseudo-partition
+(`-p 1`). This is common with EC2 volume/snapshot raw dumps.
 
 **Example — home server (ext4 root):**
 
