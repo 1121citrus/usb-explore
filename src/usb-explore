@@ -59,6 +59,16 @@
 #             Print the partition table and filesystem metadata.
 #             --json emits machine-readable JSON.
 #
+#   mount   [-i|--image PATH] [-p|--partition N] [--port PORT]
+#             [--no-open]
+#             Mount the partition as a Finder-browseable SMB volume.
+#             The volume appears under /Volumes/ and in the Finder
+#             sidebar. Press Ctrl-C to unmount and stop. No sudo
+#             required.
+#
+#   unmount   Unmount all usb-explore SMB volumes. Also triggered by
+#             ejecting from Finder or pressing Ctrl-C during mount.
+#
 #   run     [-i|--image PATH] [-p|--partition N] [--] <cmd> [args...]
 #             Run a command inside the container with the partition
 #             mounted. Arguments starting with / are automatically
@@ -910,6 +920,93 @@ do_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: mount
+# ---------------------------------------------------------------------------
+
+# do_mount — mount the partition as a Finder-browseable SMB volume.
+# Args:
+#   [--port PORT]    SMB port (default: 44500)
+#   [--no-open]      suppress automatic Finder open
+# Returns:
+#   Runs until interrupted; exit code reflects container exit code.
+do_mount() {
+    local port=44500
+    local no_open=false
+    while [[ $# -gt 0 ]]; do
+        case "${1}" in
+            -p|--partition)
+                [[ -n "${2:-}" ]] || die "--partition requires a number"
+                PARTITION="${2}"; shift ;;
+            --port)
+                [[ -n "${2:-}" ]] || die "--port requires a number"
+                port="${2}"; shift ;;
+            --no-open) no_open=true ;;
+            -*) die "Unknown mount option: ${1}" ;;
+        esac
+        shift
+    done
+
+    if ! [[ "${port}" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        die "--port must be a number between 1 and 65535"
+    fi
+
+    if lsof -i ":${port}" >/dev/null 2>&1; then
+        die "Port ${port} is already in use." \
+            "Pass --port to specify a different port."
+    fi
+
+    check_docker
+    check_image_file
+    ensure_image
+    resolve_partition
+
+    local share_name="usb-explore-$$"
+
+    if [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_TTY:-}" ]]; then
+        no_open=true
+    fi
+
+    log "Mounting partition ${PARTITION} via SMB"
+    log "  Share: smb://guest@localhost:${port}/${share_name}"
+    log "  Volume: /Volumes/${share_name}"
+    log "Press Ctrl-C to unmount and stop."
+
+    if [[ "${no_open}" == false ]] && command -v open >/dev/null 2>&1; then
+        ( sleep 2 && open "smb://guest@localhost:${port}/${share_name}" ) &
+    fi
+
+    local rc=0
+    run_container \
+        -p "${port}:${port}" \
+        "${IMAGE_REF}" mount-server "${port}" "${share_name}" || rc=$?
+    [[ "${rc}" -eq 130 ]] && return 0
+    return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
+# Subcommand: unmount
+# ---------------------------------------------------------------------------
+
+# do_unmount — unmount all usb-explore SMB volumes.
+# Args: none
+# Returns: 0
+do_unmount() {
+    local found=false
+    for vol in /Volumes/usb-explore-*; do
+        if [[ -d "${vol}" ]]; then
+            diskutil unmount "${vol}" 2>/dev/null || \
+                umount "${vol}" 2>/dev/null || true
+            found=true
+            log "Unmounted ${vol}"
+        fi
+    done
+
+    if [[ "${found}" == false ]]; then
+        log "No usb-explore mounts found"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: serve
 # ---------------------------------------------------------------------------
 
@@ -1050,7 +1147,7 @@ while [[ $# -gt 0 ]]; do
         --debug)     DEBUG=true ;;
         --version)   print_version; exit 0 ;;
         --help|-h)   usage; exit 0 ;;
-        archive|browse|build|capture|clean|copy|diff|find|hash|info|run|serve|shell)
+        archive|browse|build|capture|clean|copy|diff|find|hash|info|mount|run|serve|shell|unmount)
             SUBCOMMAND="${1}"; shift; break ;;
         -*)
             die "Unknown option: ${1}. Run 'usb-explore --help' for usage." ;;
@@ -1073,7 +1170,9 @@ case "${SUBCOMMAND}" in
     find)    do_find    "$@" ;;
     hash)    do_hash    "$@" ;;
     info)    do_info    "$@" ;;
+    mount)   do_mount   "$@" ;;
     run)     do_run     "$@" ;;
     serve)   do_serve   "$@" ;;
     shell)   do_shell   "$@" ;;
+    unmount) do_unmount "$@" ;;
 esac

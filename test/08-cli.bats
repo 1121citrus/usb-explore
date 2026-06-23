@@ -47,6 +47,8 @@ SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
     [[ "${output}" == *"find"*    ]]
     [[ "${output}" == *"hash"*    ]]
     [[ "${output}" == *"clean"*   ]]
+    [[ "${output}" == *"mount"*   ]]
+    [[ "${output}" == *"unmount"* ]]
 }
 
 @test "cli: -h is an alias for --help" {
@@ -236,6 +238,38 @@ SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
 @test "cli: 'info' subcommand is routed (not a usage error)" {
     run bash "${SCRIPT}" --image /nonexistent.img info
     [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'mount' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" --image /nonexistent.img mount --no-open
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'mount' --port flag is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img mount --port 44500 --no-open
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'mount' --port with invalid value exits non-zero" {
+    run bash "${SCRIPT}" mount --port notanumber
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"65535"* ]]
+}
+
+@test "cli: 'mount' --no-open flag is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img mount --no-open
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'unmount' subcommand is routed (not a usage error)" {
+    run bash "${SCRIPT}" unmount
+    [ "${status}" -eq 0 ]
+}
+
+@test "cli: 'unmount' with no active mounts exits cleanly" {
+    run bash "${SCRIPT}" unmount
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"No usb-explore mounts found"* ]]
 }
 
 @test "cli: 'run' subcommand reports missing command" {
