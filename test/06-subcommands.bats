@@ -910,6 +910,71 @@ ensure_enterprise_fixture() {
 # raw.img
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# RW mode: write access and inherently-RO rejection
+# ---------------------------------------------------------------------------
+
+@test "rw: can write a file to ext4 partition in RW mode" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local rw_copy="${TMPDIR_WORK}/rw-test.img"
+    cp "${FIXTURES}/single-ext4.img" "${rw_copy}"
+
+    run docker run --rm --privileged \
+        -v "${rw_copy}:/disk.img" \
+        -e "USB_PARTITION=2" \
+        -e "USB_EXPLORE_RW=true" \
+        "${IMAGE}" run sh -c 'echo rw-works > /mnt/part/rw-test.txt && cat /mnt/part/rw-test.txt'
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"rw-works"* ]]
+}
+
+@test "rw: written file persists across container restarts" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+    local rw_copy="${TMPDIR_WORK}/rw-persist.img"
+    cp "${FIXTURES}/single-ext4.img" "${rw_copy}"
+
+    # Write
+    docker run --rm --privileged \
+        -v "${rw_copy}:/disk.img" \
+        -e "USB_PARTITION=2" \
+        -e "USB_EXPLORE_RW=true" \
+        "${IMAGE}" run sh -c 'echo persist-test > /mnt/part/persist.txt'
+
+    # Read back in a new container (read-only)
+    run docker run --rm --privileged \
+        -v "${rw_copy}:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        "${IMAGE}" run cat /mnt/part/persist.txt
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"persist-test"* ]]
+}
+
+@test "rw: squashfs rejects RW mode with clear error" {
+    [[ -f "${FIXTURES}/squashfs.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/squashfs.img:/disk.img" \
+        -e "USB_PARTITION=2" \
+        -e "USB_EXPLORE_RW=true" \
+        "${IMAGE}" run ls /mnt/part
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"inherently read-only"* ]]
+}
+
+@test "rw: erofs rejects RW mode with clear error" {
+    [[ -f "${FIXTURES}/erofs.img" ]] || skip "fixture not generated"
+    run docker run --rm --privileged \
+        -v "${FIXTURES}/erofs.img:/disk.img" \
+        -e "USB_PARTITION=2" \
+        -e "USB_EXPLORE_RW=true" \
+        "${IMAGE}" run ls /mnt/part
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"inherently read-only"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# raw.img
+# ---------------------------------------------------------------------------
+
 @test "subcommand info --json: raw.img partition 2 raw_hint is non-null" {
     [[ -f "${FIXTURES}/raw.img" ]] || skip "fixture raw.img not generated"
     local hint

@@ -19,7 +19,7 @@ btrfs_detect() {
 # Returns: 0 on success
 btrfs_mount() {
     local node="${1}" mp="${2}"
-    mount -o ro,degraded -t btrfs "${node}" "${mp}"
+    mount -o "${MOUNT_MODE}",degraded -t btrfs "${node}" "${mp}"
 }
 
 # Unmount the mountpoint (best-effort).

@@ -40,6 +40,11 @@ iso9660_detect() {
 # Returns: 0 on success
 iso9660_mount() {
     local mp="${2}"
+    if [[ "${USB_EXPLORE_RW:-}" == "true" ]]; then
+        echo "error: iso9660 is inherently read-only;" \
+             "--rw and edit are not supported" >&2
+        exit 5
+    fi
     mount -o ro -t iso9660 /disk.img "${mp}"
 }
 

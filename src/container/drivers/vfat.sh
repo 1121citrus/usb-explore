@@ -17,7 +17,7 @@ vfat_detect() {
 # Returns: 0 on success
 vfat_mount() {
     local node="${1}" mp="${2}"
-    mount -o ro -t vfat "${node}" "${mp}"
+    mount -o "${MOUNT_MODE}" -t vfat "${node}" "${mp}"
 }
 
 # Unmount the mountpoint (best-effort).

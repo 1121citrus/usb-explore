@@ -17,6 +17,11 @@ erofs_detect() {
 # Returns: 0 on success
 erofs_mount() {
     local node="${1}" mp="${2}"
+    if [[ "${USB_EXPLORE_RW:-}" == "true" ]]; then
+        echo "error: erofs is inherently read-only;" \
+             "--rw and edit are not supported" >&2
+        exit 5
+    fi
     mount -o ro -t erofs "${node}" "${mp}"
 }
 

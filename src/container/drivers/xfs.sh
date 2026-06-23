@@ -11,14 +11,18 @@ xfs_detect() {
     [[ "${fstype}" == "xfs" ]]
 }
 
-# Mount the partition read-only.
+# Mount the partition.
+# In RO mode, norecovery skips log replay (required for dirty xfs).
+# In RW mode, norecovery is dropped so log replay executes.
 # Args:   $1 = block device node, $2 = mountpoint
 # Returns: 0 on success
 xfs_mount() {
     local node="${1}" mp="${2}"
-    # norecovery is required to mount an xfs filesystem read-only when the
-    # journal has not been cleanly flushed (common with captured disk images).
-    mount -o ro,norecovery -t xfs "${node}" "${mp}"
+    if [[ "${MOUNT_MODE}" == "rw" ]]; then
+        mount -o rw -t xfs "${node}" "${mp}"
+    else
+        mount -o ro,norecovery -t xfs "${node}" "${mp}"
+    fi
 }
 
 # Unmount the mountpoint (best-effort).
