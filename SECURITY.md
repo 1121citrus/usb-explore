@@ -14,14 +14,41 @@ meaningfully smaller than root on your Mac.
 
 Mitigations that are in place:
 
-- The disk image is always bind-mounted **read-only**. The container
-  cannot modify the source data.
+- The disk image is bind-mounted **read-only** by default. The `edit`
+  subcommand and `--rw` flag switch to read-write (see *Write mode*
+  below).
 - `--rm` removes the container immediately on exit. No state persists.
 - The image contains only the tools required for the job (no package
   manager, no network stack).
 
 If these trade-offs are not acceptable for your environment, do not use
 this tool.
+
+## Write mode
+
+The `edit` subcommand and `--rw` flag on `shell`/`run` mount the disk
+image read-write. This modifies the captured image in place.
+
+**Risks:**
+
+- **Journal replay.** Mounting a dirty ext4 or xfs filesystem
+  read-write triggers automatic journal/log replay, modifying the
+  image even if the user changes nothing.
+- **Filesystem housekeeping.** btrfs performs background writes
+  (balance, cleaner threads) on writable mounts.
+- **Crash consistency.** An ungraceful container exit during a write
+  session leaves the image dirty.
+- **Inherently read-only formats.** squashfs, erofs, and iso9660
+  reject `--rw` and `edit` with a clear error.
+
+**Safety mechanism:** The `edit` subcommand creates an APFS reflink
+backup (`.pre-edit`) before the first write session. On APFS volumes,
+this is instant and free (copy-on-write; disk usage increases only as
+blocks diverge). Rollback: `mv image.pre-edit image.img`.
+
+The `--rw` flag on `shell` and `run` provides **no backup and no
+confirmation** — it is intended for expert users who understand the
+risks.
 
 ## SMB share (mount subcommand)
 

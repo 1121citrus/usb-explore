@@ -31,6 +31,7 @@ handles that part.
   - [Expert tools](#expert-tools)
     - [archive — create a compressed archive](#archive--create-a-compressed-archive)
     - [diff — compare the image against a local reference](#diff--compare-the-image-against-a-local-reference)
+    - [edit — modify the image read-write](#edit--modify-the-image-read-write)
     - [hash — verify file integrity](#hash--verify-file-integrity)
   - [Developer](#developer)
     - [build — rebuild the Docker image from source](#build--rebuild-the-docker-image-from-source)
@@ -589,6 +590,47 @@ usb-explore diff /etc ./reference/etc
 
 # Check whether a config file changed
 usb-explore diff /etc/fstab ./expected-fstab
+```
+
+---
+
+#### `edit` — modify the image read-write
+
+```text
+usb-explore edit [-i usb.img] [-p N] [--yes] [--] [cmd args...]
+```
+
+Mounts the partition **read-write** for emergency repair or config
+changes. Creates an instant APFS reflink backup (`.pre-edit`) before
+the first write session. Prompts for confirmation unless `--yes` is
+given.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--yes`, `-y` | off | Skip confirmation prompt |
+
+```bash
+# Interactive shell — edit files, then exit
+usb-explore edit
+
+# Run a specific command
+usb-explore edit -- sh -c 'echo "10.0.50.1" > /etc/resolv.conf'
+
+# Run fsck without confirmation
+usb-explore edit --yes -- fsck.ext4 -y /dev/loop0
+
+# Restore from backup if something goes wrong
+mv usb.img.pre-edit usb.img
+```
+
+Not supported on squashfs, erofs, or iso9660 (inherently read-only).
+
+For expert use without backup or confirmation, `shell --rw` and
+`run --rw` are also available:
+
+```bash
+usb-explore shell --rw
+usb-explore run --rw -- sed -i 's/old/new/' /etc/hostname
 ```
 
 ---
