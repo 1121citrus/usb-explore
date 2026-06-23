@@ -29,9 +29,13 @@
 #             This is the only subcommand that does NOT use Docker.
 #
 #   clean   [-i|--image PATH] [-y|--yes]
+#             [-u|--update-volume <device>]
 #             Remove the captured disk image file. Prompts for
 #             confirmation unless -y/--yes is given. Does not require
 #             Docker.
+#             -u/--update-volume writes the image back to the USB
+#             device before removing it (inverse of capture). Prompts
+#             for confirmation separately. Requires sudo.
 #
 #   copy    [-i|--image PATH] [-p|--partition N] <src-path> <dest>
 #             Copy <src-path> (absolute within the partition) to <dest>
@@ -651,18 +655,25 @@ do_capture() {
 # ---------------------------------------------------------------------------
 
 # Remove the captured disk image file after confirming with the user.
+# With --update-volume, writes the image back to the USB device first
+# (inverse of capture).
 # Args:
-#   [-y|--yes]  skip confirmation prompt (for scripting)
+#   [-y|--yes]                    skip confirmation prompts
+#   [-u|--update-volume DEVICE]   write image to device before removing
 # Returns:
 #   0 on success or aborted; 4 if the file does not exist
 do_clean() {
     local yes=false
+    local update_device=""
     while [[ $# -gt 0 ]]; do
         case "${1}" in
             -i|--image)
                 [[ -n "${2:-}" ]] || die "--image requires a path"
                 IMAGE_FILE="${2}"; shift ;;
             -y|--yes) yes=true ;;
+            -u|--update-volume)
+                [[ -n "${2:-}" ]] || die "--update-volume requires a device"
+                update_device="${2}"; shift ;;
             -*) die "Unknown clean option: ${1}" ;;
             *) die "Unexpected argument: ${1}" ;;
         esac
@@ -677,6 +688,11 @@ do_clean() {
     local size
     size=$(du -sh "${IMAGE_FILE}" | awk '{print $1}')
 
+    # Write image back to device (inverse of capture)
+    if [[ -n "${update_device}" ]]; then
+        _write_to_volume "${update_device}" "${yes}"
+    fi
+
     if [[ "${yes}" == false ]]; then
         printf "usb-explore: Remove %s (%s)? [y/N] " \
             "${IMAGE_FILE}" "${size}" >&2
@@ -687,6 +703,62 @@ do_clean() {
 
     rm -f -- "${IMAGE_FILE}"
     log "Removed ${IMAGE_FILE} (${size})"
+}
+
+# _write_to_volume — write the disk image back to a USB device.
+# Validates the device, unmounts partitions, confirms with the user,
+# then runs dd. This is the inverse of do_capture.
+# Args:
+#   $1 = device (e.g. /dev/disk4)
+#   $2 = "true" to skip confirmation
+# Returns:
+#   0 on success; exits on error or abort
+_write_to_volume() {
+    local device="${1}"
+    local skip_confirm="${2}"
+
+    # Validate: whole-disk node only
+    if [[ ! "${device}" =~ ^/dev/disk[0-9]+$ ]]; then
+        die "Expected a whole-disk device (e.g. /dev/disk4), got: ${device}"
+    fi
+
+    if ! diskutil info "${device}" >/dev/null 2>&1; then
+        die "Device not found: ${device}"
+    fi
+
+    local device_size device_name
+    device_size=$(diskutil info "${device}" \
+        | awk -F': *' '/Disk Size/{print $2}' || echo "unknown")
+    device_name=$(diskutil info "${device}" \
+        | awk -F': *' '/Device \/ Media Name/{print $2}' || echo "unknown")
+
+    local image_size
+    image_size=$(/usr/bin/stat -f %z "${IMAGE_FILE}" 2>/dev/null || echo "?")
+
+    if [[ "${skip_confirm}" == false ]]; then
+        warn "This will OVERWRITE ${device} (${device_name}, ${device_size})"
+        warn "with ${IMAGE_FILE} ($(_fmt_bytes "${image_size}"))"
+        warn "ALL DATA ON ${device} WILL BE DESTROYED."
+        printf "usb-explore: Type YES to confirm: " >&2
+        local answer=""
+        read -r answer || answer=""
+        [[ "${answer}" == "YES" ]] \
+            || { log "Aborted (expected YES, got '${answer}')."; exit 0; }
+    fi
+
+    if diskutil unmountDisk "${device}" >/dev/null 2>&1; then
+        log "Unmounted ${device}"
+    fi
+
+    local raw_device="${device/\/dev\/disk//dev/rdisk}"
+
+    log "Writing ${IMAGE_FILE} -> ${raw_device}"
+    log "This may take several minutes..."
+
+    sudo /bin/dd if="${IMAGE_FILE}" of="${raw_device}" bs=4m 2>&1
+
+    log "Write complete. Ejecting ${device}..."
+    diskutil eject "${device}" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------

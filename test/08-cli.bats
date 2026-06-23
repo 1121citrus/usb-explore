@@ -380,6 +380,43 @@ SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
 }
 
 # ---------------------------------------------------------------------------
+# clean --update-volume
+# ---------------------------------------------------------------------------
+
+@test "cli: 'clean' --update-volume without value exits non-zero" {
+    run bash "${SCRIPT}" clean --update-volume
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"requires"* ]]
+}
+
+@test "cli: 'clean' -u short flag is accepted" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean -u /dev/disk99
+    # Exits non-zero (device not found), but not a usage error
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"not found"* || "${output}" == *"not exist"* ]]
+    rm -f "${tmp}"
+}
+
+@test "cli: 'clean' --update-volume rejects partition slices" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean --update-volume /dev/disk4s1 --yes
+    [ "${status}" -ne 0 ]
+    [[ "${output}" == *"whole-disk"* ]]
+    rm -f "${tmp}"
+}
+
+@test "cli: 'clean' --update-volume requires YES confirmation" {
+    grep -q 'Type YES to confirm' "${SCRIPT}"
+}
+
+@test "cli: 'clean' --update-volume uses raw device for dd" {
+    grep -q 'rdisk' "${SCRIPT}"
+}
+
+# ---------------------------------------------------------------------------
 # hash
 # ---------------------------------------------------------------------------
 

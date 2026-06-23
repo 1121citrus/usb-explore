@@ -238,11 +238,21 @@ what they need and are fast regardless of the original drive size.
 #### `clean` — remove the disk image
 
 ```text
-usb-explore clean [-i usb.img] [-y|--yes]
+usb-explore clean [-i usb.img] [-y|--yes] [-u|--update-volume <device>]
 ```
 
 Removes the captured disk image file. Prompts for confirmation unless
 `-y` / `--yes` is given. Does not require Docker.
+
+With `-u` / `--update-volume`, writes the image back to the USB device
+before removing it — the inverse of `capture`. This is useful after
+modifying the image with `edit`. Requires `sudo` (raw device write).
+A separate confirmation prompt requires typing `YES` (not just `y`).
+
+| Option | Description |
+| --- | --- |
+| `-y`, `--yes` | Skip confirmation prompts |
+| `-u`, `--update-volume DEVICE` | Write image to device before removing |
 
 ```bash
 # Interactive confirmation prompt
@@ -251,8 +261,13 @@ usb-explore clean
 # Skip the prompt (useful in scripts)
 usb-explore clean --yes
 
-# Remove a specific image file
-usb-explore --image /Volumes/backup/my-usb.img clean --yes
+# Write modified image back to USB, then clean up
+usb-explore clean --update-volume /dev/disk4
+
+# Full workflow: capture, edit, write back, clean
+usb-explore capture /dev/disk4
+usb-explore edit
+usb-explore clean --update-volume /dev/disk4
 ```
 
 Exit code: 0 on success or when the user declines; 4 if the file does
