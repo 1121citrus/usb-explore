@@ -29,7 +29,7 @@
 #             This is the only subcommand that does NOT use Docker.
 #
 #   clean   [-i|--image PATH] [-y|--yes]
-#             [-u|--update-volume <device>]
+#             [-u|--update-volume <device>] [-f|--force]
 #             [--skip-verify] [--dry-run]
 #             Remove the captured disk image file. Prompts for
 #             confirmation unless -y/--yes is given. Does not require
@@ -40,6 +40,8 @@
 #             the write by reading back and comparing SHA-256.
 #             --skip-verify skips the post-write read-back.
 #             --dry-run prints the dd command without executing.
+#             -f/--force bypasses device validation, allowing a
+#             plain file as the target (for testing).
 #
 #   copy    [-i|--image PATH] [-p|--partition N] <src-path> <dest>
 #             Copy <src-path> (absolute within the partition) to <dest>
@@ -179,6 +181,17 @@ CONTAINER_STARTED=false
 
 log()  { echo "usb-explore: ${*}" >&2; }
 err()  { echo "usb-explore: error: ${*}" >&2; }
+
+# _sha256 — portable SHA-256: macOS has shasum, Linux has sha256sum.
+# Args: file path (or reads stdin when no argument)
+# Returns: 0; writes "<hash>  <path>" to stdout
+_sha256() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$@"
+    else
+        sha256sum "$@"
+    fi
+}
 die()  { err "${*}"; exit 1; }
 warn() { echo "usb-explore: warning: ${*}" >&2; }
 
@@ -673,6 +686,7 @@ do_clean() {
     local update_device=""
     local skip_verify=false
     local dry_run=false
+    local force=false
     while [[ $# -gt 0 ]]; do
         case "${1}" in
             -i|--image)
@@ -681,6 +695,7 @@ do_clean() {
             -y|--yes) yes=true ;;
             --skip-verify) skip_verify=true ;;
             --dry-run) dry_run=true ;;
+            -f|--force) force=true ;;
             -u|--update-volume)
                 [[ -n "${2:-}" ]] || die "--update-volume requires a device"
                 update_device="${2}"; shift ;;
@@ -701,7 +716,7 @@ do_clean() {
     # Write image back to device (inverse of capture)
     if [[ -n "${update_device}" ]]; then
         _write_to_volume "${update_device}" "${yes}" \
-            "${skip_verify}" "${dry_run}"
+            "${skip_verify}" "${dry_run}" "${force}"
     fi
 
     if [[ "${yes}" == false ]]; then
@@ -716,87 +731,129 @@ do_clean() {
     log "Removed ${IMAGE_FILE} (${size})"
 }
 
-# _write_to_volume — write the disk image back to a USB device.
-# Validates the device, unmounts partitions, confirms with the user,
-# writes via dd, and verifies by reading back and comparing SHA-256.
-# This is the inverse of do_capture.
+# _write_to_volume — write the disk image back to a USB device or file.
+# Validates the device (unless --force), unmounts partitions, confirms
+# with the user, writes via dd, and verifies by reading back and
+# comparing SHA-256.
+# With --force, the target is treated as a plain file — no /dev/disk*
+# validation, no diskutil calls, no sudo. Enables end-to-end testing
+# without a physical device.
 # Args:
-#   $1 = device (e.g. /dev/disk4)
+#   $1 = target (device e.g. /dev/disk4, or file path with --force)
 #   $2 = "true" to skip confirmation
 #   $3 = "true" to skip post-write verification
 #   $4 = "true" for dry-run (print command, do not execute)
+#   $5 = "true" for force mode (skip device validation)
 # Returns:
 #   0 on success; exits on error, abort, or verification failure
 _write_to_volume() {
-    local device="${1}"
+    local target="${1}"
     local skip_confirm="${2}"
     local skip_verify="${3}"
     local dry_run="${4}"
+    local force="${5}"
 
-    # Validate: whole-disk node only
-    if [[ ! "${device}" =~ ^/dev/disk[0-9]+$ ]]; then
-        die "Expected a whole-disk device (e.g. /dev/disk4), got: ${device}"
+    local is_device=true
+    local dd_target="${target}"
+
+    if [[ "${force}" == true ]]; then
+        is_device=false
+    else
+        # Validate: whole-disk node only
+        if [[ ! "${target}" =~ ^/dev/disk[0-9]+$ ]]; then
+            die "Expected a whole-disk device (e.g. /dev/disk4), got: ${target}" \
+                "Pass --force to write to a file instead."
+        fi
+        dd_target="${target/\/dev\/disk//dev/rdisk}"
     fi
 
-    local raw_device="${device/\/dev\/disk//dev/rdisk}"
     local image_size
-    image_size=$(/usr/bin/stat -f %z "${IMAGE_FILE}" 2>/dev/null || echo "?")
+    image_size=$(/usr/bin/stat -f %z "${IMAGE_FILE}" 2>/dev/null \
+                 || stat -c %s "${IMAGE_FILE}" 2>/dev/null \
+                 || echo "?")
 
     # Dry-run: print what would happen and return early
     if [[ "${dry_run}" == true ]]; then
-        echo "[dry-run] sudo /bin/dd if=${IMAGE_FILE} of=${raw_device} bs=4m"
+        if [[ "${is_device}" == true ]]; then
+            echo "[dry-run] sudo /bin/dd if=${IMAGE_FILE} of=${dd_target} bs=4m"
+        else
+            echo "[dry-run] dd if=${IMAGE_FILE} of=${dd_target} bs=4m"
+        fi
         [[ "${skip_verify}" == true ]] \
             || echo "[dry-run] verify: read back ${image_size} bytes and compare SHA-256"
         return 0
     fi
 
-    if ! diskutil info "${device}" >/dev/null 2>&1; then
-        die "Device not found: ${device}"
+    if [[ "${is_device}" == true ]]; then
+        if ! diskutil info "${target}" >/dev/null 2>&1; then
+            die "Device not found: ${target}"
+        fi
+
+        local device_size device_name
+        device_size=$(diskutil info "${target}" \
+            | awk -F': *' '/Disk Size/{print $2}' || echo "unknown")
+        device_name=$(diskutil info "${target}" \
+            | awk -F': *' '/Device \/ Media Name/{print $2}' || echo "unknown")
+
+        if [[ "${skip_confirm}" == false ]]; then
+            warn "This will OVERWRITE ${target} (${device_name}, ${device_size})"
+            warn "with ${IMAGE_FILE} ($(_fmt_bytes "${image_size}"))"
+            warn "ALL DATA ON ${target} WILL BE DESTROYED."
+            printf "usb-explore: Type YES to confirm: " >&2
+            local answer=""
+            read -r answer || answer=""
+            [[ "${answer}" == "YES" ]] \
+                || { log "Aborted (expected YES, got '${answer}')."; exit 0; }
+        fi
+
+        if diskutil unmountDisk "${target}" >/dev/null 2>&1; then
+            log "Unmounted ${target}"
+        fi
+    else
+        if [[ "${skip_confirm}" == false ]]; then
+            warn "This will OVERWRITE ${target}"
+            warn "with ${IMAGE_FILE} ($(_fmt_bytes "${image_size}"))"
+            printf "usb-explore: Continue? [y/N] " >&2
+            local answer="n"
+            read -r answer || answer="n"
+            [[ "${answer}" =~ ^[Yy]$ ]] \
+                || { log "Aborted."; exit 0; }
+        fi
     fi
 
-    local device_size device_name
-    device_size=$(diskutil info "${device}" \
-        | awk -F': *' '/Disk Size/{print $2}' || echo "unknown")
-    device_name=$(diskutil info "${device}" \
-        | awk -F': *' '/Device \/ Media Name/{print $2}' || echo "unknown")
+    log "Writing ${IMAGE_FILE} -> ${dd_target}"
 
-    if [[ "${skip_confirm}" == false ]]; then
-        warn "This will OVERWRITE ${device} (${device_name}, ${device_size})"
-        warn "with ${IMAGE_FILE} ($(_fmt_bytes "${image_size}"))"
-        warn "ALL DATA ON ${device} WILL BE DESTROYED."
-        printf "usb-explore: Type YES to confirm: " >&2
-        local answer=""
-        read -r answer || answer=""
-        [[ "${answer}" == "YES" ]] \
-            || { log "Aborted (expected YES, got '${answer}')."; exit 0; }
+    # BSD dd (macOS /bin/dd) uses lowercase 4m; GNU/busybox dd uses 4M.
+    if [[ "${is_device}" == true ]]; then
+        sudo /bin/dd if="${IMAGE_FILE}" of="${dd_target}" bs=4m 2>&1
+    else
+        dd if="${IMAGE_FILE}" of="${dd_target}" bs=4M 2>&1
     fi
-
-    if diskutil unmountDisk "${device}" >/dev/null 2>&1; then
-        log "Unmounted ${device}"
-    fi
-
-    log "Writing ${IMAGE_FILE} -> ${raw_device}"
-    log "This may take several minutes..."
-
-    sudo /bin/dd if="${IMAGE_FILE}" of="${raw_device}" bs=4m 2>&1
     local dd_rc=$?
     [[ "${dd_rc}" -eq 0 ]] || die "dd failed with exit code ${dd_rc}"
 
     # Post-write verification: read back and compare SHA-256
     if [[ "${skip_verify}" != true && "${image_size}" != "?" ]]; then
-        log "Verifying write (reading back ${raw_device})..."
+        log "Verifying write..."
 
-        local image_hash device_hash
-        image_hash=$(shasum -a 256 "${IMAGE_FILE}" | awk '{print $1}')
-        device_hash=$(sudo /bin/dd if="${raw_device}" bs=4m 2>/dev/null \
-            | head -c "${image_size}" \
-            | shasum -a 256 | awk '{print $1}')
+        local image_hash target_hash
+        image_hash=$(_sha256 "${IMAGE_FILE}" | awk '{print $1}')
 
-        if [[ "${image_hash}" != "${device_hash}" ]]; then
+        if [[ "${is_device}" == true ]]; then
+            target_hash=$(sudo /bin/dd if="${dd_target}" bs=4m 2>/dev/null \
+                | head -c "${image_size}" \
+                | _sha256 | awk '{print $1}')
+        else
+            target_hash=$(dd if="${dd_target}" bs=4M 2>/dev/null \
+                | head -c "${image_size}" \
+                | _sha256 | awk '{print $1}')
+        fi
+
+        if [[ "${image_hash}" != "${target_hash}" ]]; then
             err "Verification FAILED"
             err "  Image:  ${image_hash}"
-            err "  Device: ${device_hash}"
-            die "Device content does not match image." \
+            err "  Target: ${target_hash}"
+            die "Target content does not match image." \
                 "The write may be corrupt. Do NOT remove the image file."
         fi
 
@@ -805,8 +862,12 @@ _write_to_volume() {
         log "Verification skipped (--skip-verify)"
     fi
 
-    log "Write complete. Ejecting ${device}..."
-    diskutil eject "${device}" 2>/dev/null || true
+    if [[ "${is_device}" == true ]]; then
+        log "Write complete. Ejecting ${target}..."
+        diskutil eject "${target}" 2>/dev/null || true
+    else
+        log "Write complete."
+    fi
 }
 
 # ---------------------------------------------------------------------------

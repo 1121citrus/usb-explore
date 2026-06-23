@@ -454,6 +454,66 @@ SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
     grep -q 'Do NOT remove the image file' "${SCRIPT}"
 }
 
+@test "cli: 'clean' --force bypasses device validation" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean \
+        --update-volume /tmp/target.img --force --dry-run --yes
+    rm -f "${tmp}"
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"dry-run"* ]]
+    [[ "${output}" != *"sudo"* ]]
+}
+
+@test "cli: 'clean' --force writes image to file and verifies" {
+    local src dst
+    src=$(mktemp /tmp/usb-force-src-XXXXXX)
+    dst=$(mktemp /tmp/usb-force-dst-XXXXXX)
+    local content="test-image-content-for-verification"
+    echo "${content}" > "${src}"
+
+    run bash "${SCRIPT}" --image "${src}" clean \
+        --update-volume "${dst}" --force --yes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Verified"* ]]
+    [[ "${output}" == *"SHA-256"* ]]
+
+    # Source removed by clean; verify target has correct content
+    [[ "$(cat "${dst}")" == "${content}" ]]
+    rm -f "${dst}"
+}
+
+@test "cli: 'clean' --force with --skip-verify skips read-back" {
+    local src dst
+    src=$(mktemp /tmp/usb-force-src-XXXXXX)
+    dst=$(mktemp /tmp/usb-force-dst-XXXXXX)
+    echo "skip-verify-test" > "${src}"
+
+    run bash "${SCRIPT}" --image "${src}" clean \
+        --update-volume "${dst}" --force --skip-verify --yes
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"Verification skipped"* ]]
+    # Source removed by clean; target should exist with correct content
+    [[ -f "${dst}" ]]
+    rm -f "${dst}"
+}
+
+@test "cli: 'clean' --force removes image after successful write" {
+    local src dst
+    src=$(mktemp /tmp/usb-force-src-XXXXXX)
+    dst=$(mktemp /tmp/usb-force-dst-XXXXXX)
+    echo "remove-after-write" > "${src}"
+
+    run bash "${SCRIPT}" --image "${src}" clean \
+        --update-volume "${dst}" --force --yes
+    [ "${status}" -eq 0 ]
+    # Image should be removed after write+verify
+    [[ ! -f "${src}" ]]
+    # Target should still exist
+    [[ -f "${dst}" ]]
+    rm -f "${dst}"
+}
+
 # ---------------------------------------------------------------------------
 # hash
 # ---------------------------------------------------------------------------
