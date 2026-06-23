@@ -77,9 +77,23 @@ for all options.
 Skip capture — just point at it:
 
 ```bash
+# Inspect the partition table
 usb-explore info -i /path/to/image.raw
+
+# Browse interactively
 usb-explore shell -i /path/to/image.raw
+
+# Copy a file out
 usb-explore copy -i /path/to/image.raw /etc/fstab ./fstab
+
+# LUKS-encrypted image
+usb-explore shell -i server.img --luks-passphrase-file ~/pp.txt
+
+# Mount as a Finder volume (no sudo needed)
+usb-explore mount -i /path/to/image.raw
+
+# Edit a file, then write back to the device
+usb-explore edit -i /path/to/image.raw
 ```
 
 **Capturing from a physical device** (USB drive, SD card, etc.):
@@ -197,7 +211,11 @@ Layers can stack (e.g. LUKS → LVM → ext4). `info` reports the
 detected storage layer in the Notes column and the `storage_layer`
 field in JSON output.
 
-All partition mounts are strictly read-only, guaranteeing the captured disk image remains immutable. While the container requires `--privileged` to manage loop devices, its access is bounded by the Docker Desktop Linux VM, safely isolating the macOS host.
+All partition mounts are **read-only by default**. The `edit`
+subcommand and `--rw` flag on `shell`/`run` switch to read-write
+(see [Security considerations](#security-considerations)). The
+container requires `--privileged` to manage loop devices; its access
+is bounded by the Docker Desktop Linux VM, isolating the macOS host.
 
 ---
 
@@ -205,8 +223,8 @@ All partition mounts are strictly read-only, guaranteeing the captured disk imag
 
 ### Core workflow
 
-Capture the drive once, inspect its contents, extract what you need, and
-clean up when finished.
+Capture a device (or use an existing image), inspect its contents,
+extract what you need, and clean up when finished.
 
 #### `capture` — copy a block device to a disk image
 
@@ -261,7 +279,8 @@ what they need and are fast regardless of the original drive size.
 #### `clean` — remove the disk image
 
 ```text
-usb-explore clean [-i usb.img] [-y|--yes] [-u|--update-volume <device>]
+usb-explore clean [-i usb.img] [-y|--yes] [-u|--update-volume <target>]
+    [-f|--force] [--skip-verify] [--dry-run]
 ```
 
 Removes the disk image file. Prompts for confirmation unless
@@ -275,7 +294,8 @@ A separate confirmation prompt requires typing `YES` (not just `y`).
 | Option | Description |
 | --- | --- |
 | `-y`, `--yes` | Skip confirmation prompts |
-| `-u`, `--update-volume DEVICE` | Write image to device before removing |
+| `-u`, `--update-volume TARGET` | Write image to device (or file with `--force`) before removing |
+| `-f`, `--force` | Allow a plain file as the write target (bypasses `/dev/disk*` validation) |
 | `--skip-verify` | Skip post-write SHA-256 verification |
 | `--dry-run` | Print dd command without executing |
 
@@ -339,8 +359,8 @@ usb-explore info [-i usb.img] [--json]
 ```
 
 Prints a table of all partitions, their filesystem type, size, and
-whether they can be mounted. Useful for understanding what is on the
-drive before deciding which partition to explore.
+whether they can be mounted. Useful for understanding the image layout before deciding which
+partition to explore.
 
 If the image has no partition table but contains a whole-disk filesystem,
 `info` reports `Scheme: NONE` and exposes one mountable pseudo-partition
@@ -372,6 +392,18 @@ Scheme: GPT
 2 mountable partitions found. Pass -p N to select one.
 ```
 
+**Example — EC2 volume export (no partition table):**
+
+```text
+Image:  /disk.img  (8.0 GB)
+Scheme: NONE (whole-disk filesystem)
+
+  #    Filesystem  Size        Label                   UUID        Notes
+  1    ext4        8.0 GB      /                       a1b2c3d4    [mountable]
+
+1 mountable partition (partition 1). Omit -p to auto-select.
+```
+
 The **Notes** column shows:
 
 - `[mountable]` — a filesystem driver is available; the partition can be
@@ -398,12 +430,13 @@ in the Notes column, or `null` when nothing was found).
 #### `shell` — open an interactive bash shell
 
 ```text
-usb-explore shell [-i usb.img] [-p N]
+usb-explore shell [-i usb.img] [-p N] [--rw]
 ```
 
 Starts a bash shell inside a container with the partition mounted at
-`/mnt/part`. Type `exit` or press Ctrl-D to leave. Ctrl-C interrupts the current
-command but keeps the shell open — it does not exit the session.
+`/mnt/part`. Type `exit` or press Ctrl-D to leave. Ctrl-C interrupts
+the current command but keeps the shell open — it does not exit the
+session.
 
 ```bash
 usb-explore shell
@@ -414,7 +447,8 @@ usb-explore shell
 # (usb-explore p2) /mnt/part $  exit
 ```
 
-The partition is mounted **read-only**. You cannot modify the image.
+The partition is mounted **read-only** by default. Pass `--rw` for
+write access (no backup; prefer `edit` for safe modifications).
 
 ---
 
@@ -534,10 +568,11 @@ usb-explore unmount
 #### `run` — run a command against the image
 
 ```text
-usb-explore run [-i usb.img] [-p N] [--] <command> [args…]
+usb-explore run [-i usb.img] [-p N] [--rw] [--] <command> [args…]
 ```
 
-Runs a command inside the container with the partition mounted. Arguments
+Runs a command inside the container with the partition mounted
+(read-only by default; `--rw` for write access). Arguments
 that start with `/` are treated as partition-relative paths. Output paths
 are also partition-relative, so you can pipe them directly into `copy`,
 `archive`, `hash`, or `diff`.
