@@ -253,6 +253,8 @@ A separate confirmation prompt requires typing `YES` (not just `y`).
 | --- | --- |
 | `-y`, `--yes` | Skip confirmation prompts |
 | `-u`, `--update-volume DEVICE` | Write image to device before removing |
+| `--skip-verify` | Skip post-write SHA-256 verification |
+| `--dry-run` | Print dd command without executing |
 
 ```bash
 # Interactive confirmation prompt
@@ -264,11 +266,24 @@ usb-explore clean --yes
 # Write modified image back to USB, then clean up
 usb-explore clean --update-volume /dev/disk4
 
+# Write back without verification (faster, less safe)
+usb-explore clean --update-volume /dev/disk4 --skip-verify
+
+# Dry-run: see what would happen
+usb-explore clean --update-volume /dev/disk4 --dry-run
+
 # Full workflow: capture, edit, write back, clean
 usb-explore capture /dev/disk4
 usb-explore edit
 usb-explore clean --update-volume /dev/disk4
 ```
+
+The `--update-volume` write is verified by default: after `dd`
+completes, the device is read back and its SHA-256 is compared
+against the source image. This doubles the I/O time but catches
+silent corruption from bad USB controllers, flaky cables, or
+unflushed write caches. Use `--skip-verify` to bypass when speed
+matters more than safety.
 
 Exit code: 0 on success or when the user declines; 4 if the file does
 not exist.

@@ -416,6 +416,44 @@ SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
     grep -q 'rdisk' "${SCRIPT}"
 }
 
+@test "cli: 'clean' --update-volume --dry-run prints dd command" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean \
+        --update-volume /dev/disk0 --dry-run --yes
+    rm -f "${tmp}"
+    [[ "${output}" == *"dry-run"* ]]
+    [[ "${output}" == *"/bin/dd"* ]]
+}
+
+@test "cli: 'clean' --update-volume --dry-run includes verify step" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean \
+        --update-volume /dev/disk0 --dry-run --yes
+    rm -f "${tmp}"
+    [[ "${output}" == *"verify"* ]]
+    [[ "${output}" == *"SHA-256"* ]]
+}
+
+@test "cli: 'clean' --update-volume --dry-run --skip-verify omits verify" {
+    local tmp
+    tmp=$(mktemp /tmp/usb-clean-test-XXXXXX)
+    run bash "${SCRIPT}" --image "${tmp}" clean \
+        --update-volume /dev/disk0 --dry-run --skip-verify --yes
+    rm -f "${tmp}"
+    [[ "${output}" == *"dry-run"* ]]
+    [[ "${output}" != *"verify"* ]]
+}
+
+@test "cli: 'clean' --update-volume verifies write with shasum" {
+    grep -q 'shasum -a 256' "${SCRIPT}"
+}
+
+@test "cli: 'clean' --update-volume verification failure prevents cleanup" {
+    grep -q 'Do NOT remove the image file' "${SCRIPT}"
+}
+
 # ---------------------------------------------------------------------------
 # hash
 # ---------------------------------------------------------------------------

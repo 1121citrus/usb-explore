@@ -30,12 +30,16 @@
 #
 #   clean   [-i|--image PATH] [-y|--yes]
 #             [-u|--update-volume <device>]
+#             [--skip-verify] [--dry-run]
 #             Remove the captured disk image file. Prompts for
 #             confirmation unless -y/--yes is given. Does not require
 #             Docker.
 #             -u/--update-volume writes the image back to the USB
 #             device before removing it (inverse of capture). Prompts
-#             for confirmation separately. Requires sudo.
+#             for confirmation separately. Requires sudo. Verifies
+#             the write by reading back and comparing SHA-256.
+#             --skip-verify skips the post-write read-back.
+#             --dry-run prints the dd command without executing.
 #
 #   copy    [-i|--image PATH] [-p|--partition N] <src-path> <dest>
 #             Copy <src-path> (absolute within the partition) to <dest>
@@ -656,21 +660,27 @@ do_capture() {
 
 # Remove the captured disk image file after confirming with the user.
 # With --update-volume, writes the image back to the USB device first
-# (inverse of capture).
+# (inverse of capture) and verifies the write by default.
 # Args:
 #   [-y|--yes]                    skip confirmation prompts
 #   [-u|--update-volume DEVICE]   write image to device before removing
+#   [--skip-verify]               skip post-write verification
+#   [--dry-run]                   print dd command without executing
 # Returns:
 #   0 on success or aborted; 4 if the file does not exist
 do_clean() {
     local yes=false
     local update_device=""
+    local skip_verify=false
+    local dry_run=false
     while [[ $# -gt 0 ]]; do
         case "${1}" in
             -i|--image)
                 [[ -n "${2:-}" ]] || die "--image requires a path"
                 IMAGE_FILE="${2}"; shift ;;
             -y|--yes) yes=true ;;
+            --skip-verify) skip_verify=true ;;
+            --dry-run) dry_run=true ;;
             -u|--update-volume)
                 [[ -n "${2:-}" ]] || die "--update-volume requires a device"
                 update_device="${2}"; shift ;;
@@ -690,7 +700,8 @@ do_clean() {
 
     # Write image back to device (inverse of capture)
     if [[ -n "${update_device}" ]]; then
-        _write_to_volume "${update_device}" "${yes}"
+        _write_to_volume "${update_device}" "${yes}" \
+            "${skip_verify}" "${dry_run}"
     fi
 
     if [[ "${yes}" == false ]]; then
@@ -707,19 +718,36 @@ do_clean() {
 
 # _write_to_volume — write the disk image back to a USB device.
 # Validates the device, unmounts partitions, confirms with the user,
-# then runs dd. This is the inverse of do_capture.
+# writes via dd, and verifies by reading back and comparing SHA-256.
+# This is the inverse of do_capture.
 # Args:
 #   $1 = device (e.g. /dev/disk4)
 #   $2 = "true" to skip confirmation
+#   $3 = "true" to skip post-write verification
+#   $4 = "true" for dry-run (print command, do not execute)
 # Returns:
-#   0 on success; exits on error or abort
+#   0 on success; exits on error, abort, or verification failure
 _write_to_volume() {
     local device="${1}"
     local skip_confirm="${2}"
+    local skip_verify="${3}"
+    local dry_run="${4}"
 
     # Validate: whole-disk node only
     if [[ ! "${device}" =~ ^/dev/disk[0-9]+$ ]]; then
         die "Expected a whole-disk device (e.g. /dev/disk4), got: ${device}"
+    fi
+
+    local raw_device="${device/\/dev\/disk//dev/rdisk}"
+    local image_size
+    image_size=$(/usr/bin/stat -f %z "${IMAGE_FILE}" 2>/dev/null || echo "?")
+
+    # Dry-run: print what would happen and return early
+    if [[ "${dry_run}" == true ]]; then
+        echo "[dry-run] sudo /bin/dd if=${IMAGE_FILE} of=${raw_device} bs=4m"
+        [[ "${skip_verify}" == true ]] \
+            || echo "[dry-run] verify: read back ${image_size} bytes and compare SHA-256"
+        return 0
     fi
 
     if ! diskutil info "${device}" >/dev/null 2>&1; then
@@ -731,9 +759,6 @@ _write_to_volume() {
         | awk -F': *' '/Disk Size/{print $2}' || echo "unknown")
     device_name=$(diskutil info "${device}" \
         | awk -F': *' '/Device \/ Media Name/{print $2}' || echo "unknown")
-
-    local image_size
-    image_size=$(/usr/bin/stat -f %z "${IMAGE_FILE}" 2>/dev/null || echo "?")
 
     if [[ "${skip_confirm}" == false ]]; then
         warn "This will OVERWRITE ${device} (${device_name}, ${device_size})"
@@ -750,12 +775,35 @@ _write_to_volume() {
         log "Unmounted ${device}"
     fi
 
-    local raw_device="${device/\/dev\/disk//dev/rdisk}"
-
     log "Writing ${IMAGE_FILE} -> ${raw_device}"
     log "This may take several minutes..."
 
     sudo /bin/dd if="${IMAGE_FILE}" of="${raw_device}" bs=4m 2>&1
+    local dd_rc=$?
+    [[ "${dd_rc}" -eq 0 ]] || die "dd failed with exit code ${dd_rc}"
+
+    # Post-write verification: read back and compare SHA-256
+    if [[ "${skip_verify}" != true && "${image_size}" != "?" ]]; then
+        log "Verifying write (reading back ${raw_device})..."
+
+        local image_hash device_hash
+        image_hash=$(shasum -a 256 "${IMAGE_FILE}" | awk '{print $1}')
+        device_hash=$(sudo /bin/dd if="${raw_device}" bs=4m 2>/dev/null \
+            | head -c "${image_size}" \
+            | shasum -a 256 | awk '{print $1}')
+
+        if [[ "${image_hash}" != "${device_hash}" ]]; then
+            err "Verification FAILED"
+            err "  Image:  ${image_hash}"
+            err "  Device: ${device_hash}"
+            die "Device content does not match image." \
+                "The write may be corrupt. Do NOT remove the image file."
+        fi
+
+        log "Verified: SHA-256 ${image_hash:0:16}... matches"
+    elif [[ "${skip_verify}" == true ]]; then
+        log "Verification skipped (--skip-verify)"
+    fi
 
     log "Write complete. Ejecting ${device}..."
     diskutil eject "${device}" 2>/dev/null || true
