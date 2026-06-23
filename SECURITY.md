@@ -23,6 +23,26 @@ Mitigations that are in place:
 If these trade-offs are not acceptable for your environment, do not use
 this tool.
 
+## SMB share (mount subcommand)
+
+The `mount` subcommand starts an SMB server inside the container to
+expose the partition as a Finder-mountable volume. Security properties:
+
+- The SMB share is **read-only** (`read only = yes` in smb.conf).
+- Guest/anonymous access only — no passwords are stored or transmitted.
+- The share is bound to `localhost` via Docker port mapping (`-p
+  PORT:PORT`). It is accessible to any process on the same machine
+  but is **not reachable from the network**.
+- NetBIOS is disabled (`disable netbios = yes`), eliminating broadcast
+  discovery.
+- SMB1 is disabled (`server min protocol = SMB2`).
+- `force user = root` in the share definition allows reading all
+  partition files regardless of their Linux UID. This is necessary
+  because captured disk images contain files with arbitrary UIDs.
+
+The SMB share is ephemeral — it exists only while the `mount` session
+is running and disappears when the container stops.
+
 ## LUKS credential handling
 
 The storage-layer feature can decrypt LUKS volumes. Credentials are

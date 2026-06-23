@@ -24,8 +24,10 @@ handles that part.
   - [Exploration and search](#exploration-and-search)
     - [browse — visual file manager](#browse--visual-file-manager)
     - [find — search for files or content](#find--search-for-files-or-content)
+    - [mount — browse the partition in Finder](#mount--browse-the-partition-in-finder)
     - [run — run a command against the image](#run--run-a-command-against-the-image)
     - [serve — browse the partition over HTTP](#serve--browse-the-partition-over-http)
+    - [unmount — eject mounted volumes](#unmount--eject-mounted-volumes)
   - [Expert tools](#expert-tools)
     - [archive — create a compressed archive](#archive--create-a-compressed-archive)
     - [diff — compare the image against a local reference](#diff--compare-the-image-against-a-local-reference)
@@ -419,6 +421,59 @@ usb-explore find "sshd_config" --grep "PermitRootLogin"
 
 Exit code: 0 for a name search regardless of matches; 1 when `--grep`
 finds no matches (standard `grep` behaviour).
+
+---
+
+#### `mount` — browse the partition in Finder
+
+```text
+usb-explore mount [-i usb.img] [-p N] [--port PORT] [--no-open]
+```
+
+Mounts the partition as a read-only SMB volume that appears in the
+macOS Finder sidebar. No `sudo` required — Finder handles the SMB
+mount via the native NetFS framework.
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `--port PORT` | 44500 | SMB server port |
+| `--no-open` | off | Suppress automatic Finder open |
+
+```bash
+# Mount and browse in Finder
+usb-explore mount
+
+# Mount on a specific port (for concurrent sessions)
+usb-explore mount --port 44501
+
+# Mount without opening Finder (e.g. in an SSH session)
+usb-explore mount --no-open
+```
+
+The volume appears at `/Volumes/usb-explore-<pid>`. Press Ctrl-C in
+the terminal to unmount and stop the container. You can also eject
+the volume from Finder, then Ctrl-C the terminal session.
+
+Multiple `mount` sessions can run simultaneously on different ports.
+Each session uses a unique share name derived from the shell PID.
+
+---
+
+#### `unmount` — eject mounted volumes
+
+```text
+usb-explore unmount
+```
+
+Unmounts all usb-explore SMB volumes under `/Volumes/`. This is
+equivalent to ejecting from Finder. Does not stop the containers —
+use Ctrl-C in the terminal running `mount` to stop the container
+after unmounting.
+
+```bash
+# Eject all usb-explore volumes
+usb-explore unmount
+```
 
 ---
 
