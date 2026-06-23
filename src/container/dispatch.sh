@@ -29,6 +29,24 @@ LAYER_DRIVERS=(luks lvm)
 # partition-level filesystem, so vfat (EFI) is handled first and wins.
 FS_DRIVERS=(ext xfs vfat squashfs btrfs erofs iso9660)
 
+# ---------------------------------------------------------------------------
+# Read-write mode globals
+# ---------------------------------------------------------------------------
+
+# USB_EXPLORE_RW controls whether the image is mounted read-write.
+# Drivers use these globals instead of hardcoded flags.
+USB_EXPLORE_RW="${USB_EXPLORE_RW:-false}"
+# shellcheck disable=SC2034  # LUKS_RO_FLAG is read by drivers/luks.sh
+if [[ "${USB_EXPLORE_RW}" == "true" ]]; then
+    MOUNT_MODE="rw"
+    LOOP_RO_FLAG=""
+    LUKS_RO_FLAG=""
+else
+    MOUNT_MODE="ro"
+    LOOP_RO_FLAG="--read-only"
+    LUKS_RO_FLAG="--readonly"
+fi
+
 # Normalize an operator-provided run scope into a safe dm-name prefix.
 # This prevents one invocation from cleaning up another invocation's
 # mappings when multiple containers run concurrently.
@@ -136,7 +154,8 @@ attach_partition() {
     fi
 
     for attempt in 1 2 3 4 5; do
-        PART_LOOP=$(losetup --find --show --read-only \
+        # shellcheck disable=SC2086
+        PART_LOOP=$(losetup --find --show ${LOOP_RO_FLAG} \
             --offset="${offset}" \
             --sizelimit="${sizelimit}" \
             /disk.img 2>/dev/null) && break
@@ -173,7 +192,8 @@ attach_whole_disk() {
     fi
 
     for attempt in 1 2 3 4 5; do
-        PART_LOOP=$(losetup --find --show --read-only /disk.img 2>/dev/null) && break
+        # shellcheck disable=SC2086
+        PART_LOOP=$(losetup --find --show ${LOOP_RO_FLAG} /disk.img 2>/dev/null) && break
         [[ "${attempt}" -lt 5 ]] || {
             echo "error: no loop device available after ${attempt} attempts." >&2
             exit 5
@@ -278,7 +298,7 @@ mount_partition() {
 
         # Check for ISO9660 magic at sector 16 (byte 32769)
         if dd if=/disk.img bs=2048 skip=16 count=1 2>/dev/null | grep -q "CD001"; then
-            mount -o ro -t iso9660 /disk.img /mnt/part
+            mount -o "${MOUNT_MODE}" -t iso9660 /disk.img /mnt/part
             return 0
         fi
         echo "error: partition ${USB_PARTITION} is an ISO data region but" >&2
@@ -609,7 +629,9 @@ do_serve() {
 
 do_shell() {
     mount_partition
-    export PS1="(usb-explore p${USB_PARTITION}) \w \$ "
+    local _rw_tag=""
+    [[ "${USB_EXPLORE_RW}" == "true" ]] && _rw_tag=" RW"
+    export PS1="(usb-explore p${USB_PARTITION}${_rw_tag}) \w \$ "
     cd /mnt/part
     # Disable bracketed-paste mode (bash 5.1+ default).  Without this,
     # readline emits [?2004h/[?2004l escape sequences around each accepted

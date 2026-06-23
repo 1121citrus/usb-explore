@@ -948,3 +948,21 @@ EOF
     grep -q '\-t 0' "${SCRIPT}"
     grep -q '\-t 1' "${SCRIPT}"
 }
+
+# ---------------------------------------------------------------------------
+# Static analysis — RW mode infrastructure
+# ---------------------------------------------------------------------------
+
+@test "rw: dispatch.sh reads USB_EXPLORE_RW environment variable" {
+    grep -q 'USB_EXPLORE_RW' "${DISPATCH}"
+}
+
+@test "rw: dispatch.sh defines MOUNT_MODE, LOOP_RO_FLAG, LUKS_RO_FLAG" {
+    grep -q 'MOUNT_MODE=' "${DISPATCH}"
+    grep -q 'LOOP_RO_FLAG=' "${DISPATCH}"
+    grep -q 'LUKS_RO_FLAG=' "${DISPATCH}"
+}
+
+@test "rw: losetup calls use LOOP_RO_FLAG variable not hardcoded --read-only" {
+    run ! grep -E 'losetup.*--read-only' "${DISPATCH}"
+}
