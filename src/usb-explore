@@ -76,10 +76,12 @@
 #   unmount   Unmount all usb-explore SMB volumes. Also triggered by
 #             ejecting from Finder or pressing Ctrl-C during mount.
 #
-#   run     [-i|--image PATH] [-p|--partition N] [--] <cmd> [args...]
+#   run     [-i|--image PATH] [-p|--partition N] [--rw]
+#             [--] <cmd> [args...]
 #             Run a command inside the container with the partition
 #             mounted. Arguments starting with / are automatically
 #             prefixed with /mnt/part.
+#             --rw mounts read-write (no backup, no confirmation).
 #
 #   serve   [-i|--image PATH] [-p|--partition N] [--port PORT]
 #             [--no-open]
@@ -90,9 +92,10 @@
 #             The browser is also suppressed automatically in SSH
 #             sessions and headless environments.
 #
-#   shell   [-i|--image PATH] [-p|--partition N]
+#   shell   [-i|--image PATH] [-p|--partition N] [--rw]
 #             Start an interactive bash shell with a partition mounted
 #             at /mnt/part inside the container.
+#             --rw mounts read-write (no backup, no confirmation).
 #
 # GLOBAL OPTIONS
 #   -i|--image PATH        Disk image file (default: ./usb.img)
@@ -975,14 +978,14 @@ do_info() {
 # ---------------------------------------------------------------------------
 
 do_run() {
-    # Accept -p/--partition here so 'usb-explore run -p N -- cmd' works
-    # alongside the global form 'usb-explore -p N run -- cmd'.
+    # Accept -p/--partition and --rw here so 'usb-explore run --rw -- cmd' works.
     # -- ends option parsing; anything after it is the command to exec.
     while [[ $# -gt 0 && "${1}" != "--" ]]; do
         case "${1}" in
             -p|--partition)
                 [[ -n "${2:-}" ]] || die "--partition requires a number"
                 PARTITION="${2}"; shift ;;
+            --rw) RW_MODE=true ;;
             -*) die "Unknown run option: ${1}
        Pass -p before the subcommand:  usb-explore -p N run -- <cmd>
        or between subcommand and --:   usb-explore run -p N -- <cmd>" ;;
@@ -1168,6 +1171,7 @@ do_shell() {
             -p|--partition)
                 [[ -n "${2:-}" ]] || die "--partition requires a number"
                 PARTITION="${2}"; shift ;;
+            --rw) RW_MODE=true ;;
             -*) die "Unknown shell option: ${1}" ;;
             *)  die "Unexpected argument: ${1}" ;;
         esac

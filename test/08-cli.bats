@@ -1020,3 +1020,22 @@ EOF
     [ "${status}" -eq 0 ]
     [[ "${output}" == *"edit"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# --rw flag on shell and run
+# ---------------------------------------------------------------------------
+
+@test "cli: 'shell --rw' is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img shell --rw
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: 'run --rw' is accepted" {
+    run bash "${SCRIPT}" --image /nonexistent.img run --rw -- echo test
+    [ "${status}" -ne 2 ]
+}
+
+@test "cli: --help documents --rw on shell" {
+    run bash "${SCRIPT}" --help
+    [[ "${output}" == *"--rw"* ]]
+}
