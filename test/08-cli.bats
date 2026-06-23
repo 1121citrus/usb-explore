@@ -966,3 +966,7 @@ EOF
 @test "rw: losetup calls use LOOP_RO_FLAG variable not hardcoded --read-only" {
     run ! grep -E 'losetup.*--read-only' "${DISPATCH}"
 }
+
+@test "rw: LUKS driver uses LUKS_RO_FLAG not hardcoded --readonly" {
+    run ! grep -E 'cryptsetup open --readonly' "${LUKS_DRIVER}"
+}
