@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# usb-explore — inspect Linux USB disk images from macOS via Docker.
+# usb-explore — inspect and modify Linux disk images from macOS via Docker.
 #
 # Copyright (C) 2026 1121 Citrus
 # SPDX-License-Identifier: AGPL-3.0-or-later
@@ -25,7 +25,7 @@
 #
 #   capture <device> [-o|--output PATH] [--no-sparse]
 #             [--progress-interval N] [--dry-run]
-#             Copy a USB device to a disk image file using dd.
+#             Copy a block device to a disk image file using dd.
 #             This is the only subcommand that does NOT use Docker.
 #
 #   clean   [-i|--image PATH] [-y|--yes]
@@ -34,7 +34,7 @@
 #             Remove the captured disk image file. Prompts for
 #             confirmation unless -y/--yes is given. Does not require
 #             Docker.
-#             -u/--update-volume writes the image back to the USB
+#             -u/--update-volume writes the image back to a block
 #             device before removing it (inverse of capture). Prompts
 #             for confirmation separately. Requires sudo. Verifies
 #             the write by reading back and comparing SHA-256.
@@ -672,7 +672,7 @@ do_capture() {
 # ---------------------------------------------------------------------------
 
 # Remove the captured disk image file after confirming with the user.
-# With --update-volume, writes the image back to the USB device first
+# With --update-volume, writes the image back to a block device first
 # (inverse of capture) and verifies the write by default.
 # Args:
 #   [-y|--yes]                    skip confirmation prompts

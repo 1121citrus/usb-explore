@@ -85,7 +85,7 @@ accepted three ways, in decreasing order of safety:
 - **`--luks-passphrase VALUE` (discouraged).** Passed to the container
   as the `USB_EXPLORE_LUKS_PASSPHRASE` environment variable, which is
   visible in `docker inspect` and process listings. Use only for
-  throwaway test images, never for sensitive media.
+  throwaway test images, never for production images.
 
 All decrypted volumes are opened with `cryptsetup --readonly`; the
 source image is never modified.

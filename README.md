@@ -1,11 +1,13 @@
 # usb-explore
 
-Look inside a Linux USB drive from a Mac, without installing anything extra.
+Look inside any Linux disk image from a Mac, without installing
+anything extra.
 
-You copy the drive to a file once, then browse it as many times as you
-like — list files, copy things out, compare them to a reference. The
-Mac never needs to understand the Linux filesystem; a Docker container
-handles that part.
+Point the tool at a disk image — captured from a USB drive, exported
+from EC2, dumped from a VM, or created with `dd` — and browse it as
+many times as you like. List files, copy things out, compare them to
+a reference. The Mac never needs to understand the Linux filesystem;
+a Docker container handles that part.
 
 ---
 
@@ -16,7 +18,7 @@ handles that part.
 - [Architecture overview](#architecture-overview)
 - [Subcommands](#subcommands)
   - [Core workflow](#core-workflow)
-    - [capture — copy a USB drive to a disk image](#capture--copy-a-usb-drive-to-a-disk-image)
+    - [capture — copy a block device to a disk image](#capture--copy-a-block-device-to-a-disk-image)
     - [clean — remove the disk image](#clean--remove-the-disk-image)
     - [copy — copy files out of the image](#copy--copy-files-out-of-the-image)
     - [info — show the partition table](#info--show-the-partition-table)
@@ -71,14 +73,23 @@ for all options.
 
 ### Use
 
-With a USB drive plugged in:
+**Already have a disk image** (EC2 export, VM snapshot, `dd` dump)?
+Skip capture — just point at it:
 
 ```bash
-# 1. Find your USB drive
-diskutil list
-# Look for your drive, e.g. /dev/disk4
+usb-explore info -i /path/to/image.raw
+usb-explore shell -i /path/to/image.raw
+usb-explore copy -i /path/to/image.raw /etc/fstab ./fstab
+```
 
-# 2. Copy it to a disk image (run once — takes a few minutes for a 32 GB drive)
+**Capturing from a physical device** (USB drive, SD card, etc.):
+
+```bash
+# 1. Find the device
+diskutil list
+# Look for the device, e.g. /dev/disk4
+
+# 2. Copy it to a disk image (one-time; a few minutes for 32 GB)
 usb-explore capture /dev/disk4
 
 # 3. See what is on it
@@ -98,8 +109,8 @@ usb-explore run -- find /home -name '*.log'
 usb-explore clean
 ```
 
-The drive image is saved as `usb.img` in the current directory. You can
-unplug the USB drive after step 2.
+The disk image is saved as `usb.img` in the current directory. If you
+captured from a physical device, you can disconnect it after step 2.
 
 ---
 
@@ -146,10 +157,21 @@ a JSON summary with the result.
 
 ## Architecture overview
 
-Because Docker Desktop for macOS virtualizes Linux but does not expose raw host block devices (e.g., `/dev/disk4`) to containers, direct mounting of a USB drive is not possible. `usb-explore` uses a two-stage approach to bypass this limitation:
+Because Docker Desktop for macOS virtualizes Linux but does not expose
+raw host block devices to containers, the tool works with image files
+rather than live devices:
 
-1. **Host capture**: A native macOS script uses `dd` to copy the physical USB drive to a sparse image file block-by-block.
-2. **Container isolation**: The image file is bind-mounted into a minimal Ubuntu-based Docker container. The container uses standard Linux utilities (`sfdisk`, `losetup`, `blkid`, `mount`) to parse the partition table and attach loop devices. If no partition table is present but a filesystem exists at byte 0 (common for EC2 raw volume exports), `usb-explore` treats the image as a single pseudo-partition.
+1. **Host capture** (optional): A native macOS script uses `dd` to
+   copy a physical block device (e.g., a USB drive) to a sparse image
+   file. This step is unnecessary when the disk image already exists
+   (EC2 export, VM snapshot, `dd` dump).
+2. **Container isolation**: The image file is bind-mounted into a
+   minimal Ubuntu-based Docker container. The container uses standard
+   Linux utilities (`sfdisk`, `losetup`, `blkid`, `mount`) to parse
+   the partition table and attach loop devices. If no partition table
+   is present but a filesystem exists at byte 0 (common for EC2 raw
+   volume exports), `usb-explore` treats the image as a single
+   pseudo-partition.
 
 Filesystem support is implemented via a modular driver system inside the container:
 
@@ -186,14 +208,14 @@ All partition mounts are strictly read-only, guaranteeing the captured disk imag
 Capture the drive once, inspect its contents, extract what you need, and
 clean up when finished.
 
-#### `capture` — copy a USB drive to a disk image
+#### `capture` — copy a block device to a disk image
 
 ```text
 usb-explore capture <device> [options]
 ```
 
-Copies the USB device to a flat image file using `dd`. The device must be
-a whole-disk node (e.g. `/dev/disk4`, not `/dev/disk4s1`).
+Copies a block device to a flat image file using `dd`. The device must
+be a whole-disk node (e.g. `/dev/disk4`, not `/dev/disk4s1`).
 
 | Option | Default | Description |
 | --- | --- | --- |
@@ -208,14 +230,15 @@ a whole-disk node (e.g. `/dev/disk4`, not `/dev/disk4s1`).
 usb-explore capture /dev/disk4 --output /Volumes/backup/my-usb.img
 ```
 
-On APFS volumes, the image file is sparse: a 64 GB drive with 8 GB of
+On APFS volumes, the image file is sparse: a 64 GB source with 8 GB of
 data will occupy about 8–10 GB of disk space, not 64 GB. The image is
 complete and exact — the Mac's filesystem just skips writing zero blocks.
 
-Progress is reported every 5 seconds. On a large drive, capturing can
-take 15–30 minutes. You can unplug the drive when it finishes.
+Progress is reported every 5 seconds. On a large device, capturing can
+take 15-30 minutes. If capturing from a removable device, you can
+disconnect it when finished.
 
-##### Why capture is required — and why direct device access is not possible
+##### Why capture is required for physical devices
 
 Docker Desktop on macOS runs a Linux VM (via Hypervisor.framework or
 HyperKit). macOS block device nodes such as `/dev/disk4` do not exist
@@ -241,10 +264,10 @@ what they need and are fast regardless of the original drive size.
 usb-explore clean [-i usb.img] [-y|--yes] [-u|--update-volume <device>]
 ```
 
-Removes the captured disk image file. Prompts for confirmation unless
+Removes the disk image file. Prompts for confirmation unless
 `-y` / `--yes` is given. Does not require Docker.
 
-With `-u` / `--update-volume`, writes the image back to the USB device
+With `-u` / `--update-volume`, writes the image back to a block device
 before removing it — the inverse of `capture`. This is useful after
 modifying the image with `edit`. Requires `sudo` (raw device write).
 A separate confirmation prompt requires typing `YES` (not just `y`).
@@ -281,7 +304,7 @@ usb-explore clean --update-volume /dev/disk4
 The `--update-volume` write is verified by default: after `dd`
 completes, the device is read back and its SHA-256 is compared
 against the source image. This doubles the I/O time but catches
-silent corruption from bad USB controllers, flaky cables, or
+silent corruption from bad controllers, flaky cables, or
 unflushed write caches. Use `--skip-verify` to bypass when speed
 matters more than safety.
 
@@ -711,7 +734,7 @@ you are modifying the tool itself. See [Building from source](#building-from-sou
 
 ## Partition selection
 
-Most drives have one main data partition and one EFI (boot) partition.
+Most disk images have one main data partition and one EFI (boot) partition.
 Both are considered mountable — the vfat driver handles EFI partitions.
 When exactly one mountable partition is found, it is selected
 automatically. When two or more are found, `usb-explore info` is printed
