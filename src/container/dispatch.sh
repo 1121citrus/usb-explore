@@ -552,6 +552,47 @@ do_select_partition() {
 }
 
 # ---------------------------------------------------------------------------
+# Subcommand: mount-server
+# ---------------------------------------------------------------------------
+
+# Start an SMB server exposing the mounted partition as a read-only share.
+# The host wrapper maps the port and opens the share in Finder.
+# Args:
+#   $1  port — smbd listen port (default: from USB_EXPLORE_SMB_PORT or 44500)
+#   $2  share — share name (default: from USB_EXPLORE_SMB_SHARE or "partition")
+# Returns:
+#   Runs until killed; exit code reflects smbd exit code.
+do_mount_server() {
+    local port="${1:-${USB_EXPLORE_SMB_PORT:-44500}}"
+    local share_name="${2:-${USB_EXPLORE_SMB_SHARE:-partition}}"
+
+    mount_partition
+
+    cat > /tmp/smb.conf <<SMBEOF
+[global]
+server role = standalone
+map to guest = Bad User
+guest account = nobody
+log file = /dev/stdout
+log level = 1
+smb ports = ${port}
+disable netbios = yes
+dns proxy = no
+server min protocol = SMB2
+
+[${share_name}]
+path = /mnt/part
+browseable = yes
+read only = yes
+guest ok = yes
+force user = root
+SMBEOF
+
+    exec smbd --foreground --no-process-group \
+        --configfile /tmp/smb.conf
+}
+
+# ---------------------------------------------------------------------------
 # Subcommand: serve
 # ---------------------------------------------------------------------------
 
@@ -592,6 +633,7 @@ case "${SUBCOMMAND}" in
     find)    do_find    "$@" ;;
     hash)    do_hash    "$@" ;;
     info)    do_info    "$@" ;;
+    mount-server)     do_mount_server     "$@" ;;
     run)              do_run              "$@" ;;
     select-partition) do_select_partition "$@" ;;
     serve)            do_serve            "$@" ;;

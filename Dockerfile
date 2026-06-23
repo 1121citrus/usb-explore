@@ -55,6 +55,7 @@ RUN apt-get update \
       ncdu \
       python3 \
       rsync \
+      samba \
       squashfs-tools \
       util-linux \
       xfsprogs \
