@@ -886,7 +886,7 @@ Required repository secrets for the push stage:
 ## Security considerations
 
 `usb-explore` runs its Docker container with `--privileged` because
-`losetup` (associating the disk image with a loop device) and `mount`
+`losetup` (attaching the disk image to a loop device) and `mount`
 both require `CAP_SYS_ADMIN` at the Linux kernel level. There is no
 userspace alternative.
 
@@ -894,12 +894,30 @@ On macOS, Docker containers run inside an isolated Linux VM managed by
 Docker Desktop. A container escape from `--privileged` reaches that VM,
 not your Mac's filesystem or your files. This is a real but bounded risk.
 
-The disk image is always mounted **read-only**. The container cannot
-modify the source image. The container is removed immediately on exit
-(`--rm`).
+**Read-only by default.** The disk image is mounted read-only unless
+you explicitly request write access via `edit` or `--rw`. In
+read-only mode, the container cannot modify the source image.
 
-If you are not comfortable running a privileged container, this tool is
-not for you.
+**Write mode is destructive.** The `edit` subcommand and `--rw` flag
+mount the image read-write, modifying it in place. `edit` creates an
+APFS reflink backup (`.pre-edit`) before the first write session;
+`--rw` on `shell`/`run` does not. Mounting a dirty ext4 or xfs
+filesystem read-write triggers automatic journal replay, modifying
+the image even if you change nothing. Inherently read-only formats
+(squashfs, erofs, iso9660) reject write access with a clear error.
+See [SECURITY.md](SECURITY.md) for the full write-mode risk analysis.
+
+**`--update-volume` overwrites block devices.** The `clean
+--update-volume` option writes the image back to a physical device
+using `dd`. This is irreversible and destroys all data on the target
+device. It is gated behind a `YES` confirmation (not just `y`) and
+verified by default with a post-write SHA-256 read-back.
+
+The container is removed immediately on exit (`--rm`). No state
+persists between runs.
+
+If you are not comfortable running a privileged container, this tool
+is not for you.
 
 ---
 
