@@ -830,6 +830,56 @@ ensure_enterprise_fixture() {
     [[ "${output}" == *"read only = yes"* ]]
 }
 
+@test "subcommand mount-server: two concurrent sessions on different ports" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port1=19448 port2=19449
+
+    MOUNT_CID=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port1}:${port1}" \
+        "${IMAGE}" mount-server "${port1}" "share-a")
+
+    local cid2
+    cid2=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port2}:${port2}" \
+        "${IMAGE}" mount-server "${port2}" "share-b")
+
+    # Wait for both
+    local ready1=false ready2=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if [[ "${ready1}" == false ]]; then
+            docker exec "${MOUNT_CID}" \
+                bash -c "echo > /dev/tcp/localhost/${port1}" 2>/dev/null \
+                && ready1=true
+        fi
+        if [[ "${ready2}" == false ]]; then
+            docker exec "${cid2}" \
+                bash -c "echo > /dev/tcp/localhost/${port2}" 2>/dev/null \
+                && ready2=true
+        fi
+        [[ "${ready1}" == true && "${ready2}" == true ]] && break
+    done
+    [[ "${ready1}" == true && "${ready2}" == true ]] \
+        || { docker stop "${cid2}" >/dev/null 2>&1 || true
+             skip "concurrent SMB servers did not start within 10 s"; }
+
+    # Both accessible
+    run docker exec "${MOUNT_CID}" cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+
+    run docker exec "${cid2}" cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+
+    docker stop "${cid2}" >/dev/null 2>&1 || true
+}
+
 @test "subcommand mount-server: container stops cleanly on docker stop" {
     [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
 

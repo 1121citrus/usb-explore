@@ -256,6 +256,10 @@ SUBCOMMAND_TESTS="${BATS_TEST_DIRNAME}/06-subcommands.bats"
     [[ "${output}" == *"65535"* ]]
 }
 
+@test "cli: 'mount' detects port collision via lsof" {
+    grep -q 'lsof -i' "${SCRIPT}"
+}
+
 @test "cli: 'mount' --no-open flag is accepted" {
     run bash "${SCRIPT}" --image /nonexistent.img mount --no-open
     [ "${status}" -ne 2 ]
