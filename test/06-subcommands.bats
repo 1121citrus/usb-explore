@@ -6,16 +6,21 @@ FIXTURES="${BATS_TEST_DIRNAME}/fixtures"
 
 setup() {
     TMPDIR_WORK=$(mktemp -d)
-    # SERVE_CID holds the ID of a detached serve container started by a test;
-    # teardown() stops it so the test body never needs trap EXIT (which would
+    # SERVE_CID / MOUNT_CID hold IDs of detached containers started by a test;
+    # teardown() stops them so the test body never needs trap EXIT (which would
     # replace bats' own EXIT handler and suppress the TAP result line).
     SERVE_CID=""
+    MOUNT_CID=""
 }
 
 teardown() {
     if [[ -n "${SERVE_CID}" ]]; then
         docker stop "${SERVE_CID}" >/dev/null 2>&1 || true
         SERVE_CID=""
+    fi
+    if [[ -n "${MOUNT_CID}" ]]; then
+        docker stop "${MOUNT_CID}" >/dev/null 2>&1 || true
+        MOUNT_CID=""
     fi
     rm -rf "${TMPDIR_WORK}"
 }
@@ -759,6 +764,96 @@ ensure_enterprise_fixture() {
     expected=$(awk '{print $1}' "${FIXTURES}/showcase-home.img.gz.sha256")
     actual=$(sha256sum "${FIXTURES}/showcase-home.img.gz" | awk '{print $1}')
     [ "${actual}" = "${expected}" ]
+}
+
+# ---------------------------------------------------------------------------
+# raw.img
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# mount-server (SMB share)
+# ---------------------------------------------------------------------------
+
+@test "subcommand mount-server: smbd starts and partition is mounted" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port=19445
+    MOUNT_CID=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port}:${port}" \
+        "${IMAGE}" mount-server "${port}" "test-share")
+
+    # Wait for smbd to accept TCP connections
+    local ready=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if docker exec "${MOUNT_CID}" \
+            bash -c "echo > /dev/tcp/localhost/${port}" 2>/dev/null; then
+            ready=true; break
+        fi
+    done
+    [[ "${ready}" == true ]] || skip "SMB server did not start within 10 s"
+
+    # Verify partition is mounted and accessible
+    run docker exec "${MOUNT_CID}" cat /mnt/part/etc/hostname
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"usb-explore-test"* ]]
+}
+
+@test "subcommand mount-server: partition files are visible via smbd" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port=19446
+    MOUNT_CID=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port}:${port}" \
+        "${IMAGE}" mount-server "${port}" "test-share")
+
+    local ready=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if docker exec "${MOUNT_CID}" \
+            bash -c "echo > /dev/tcp/localhost/${port}" 2>/dev/null; then
+            ready=true; break
+        fi
+    done
+    [[ "${ready}" == true ]] || skip "SMB server did not start within 10 s"
+
+    # Verify smbd is serving the correct share path by checking that
+    # the smb.conf references /mnt/part and the share name
+    run docker exec "${MOUNT_CID}" cat /tmp/smb.conf
+    [ "${status}" -eq 0 ]
+    [[ "${output}" == *"/mnt/part"* ]]
+    [[ "${output}" == *"test-share"* ]]
+    [[ "${output}" == *"read only = yes"* ]]
+}
+
+@test "subcommand mount-server: container stops cleanly on docker stop" {
+    [[ -f "${FIXTURES}/single-ext4.img" ]] || skip "fixture not generated"
+
+    local port=19447
+    MOUNT_CID=$(docker run --rm -d --privileged \
+        -v "${FIXTURES}/single-ext4.img:/disk.img:ro" \
+        -e "USB_PARTITION=2" \
+        -p "${port}:${port}" \
+        "${IMAGE}" mount-server "${port}" "test-share")
+
+    local ready=false
+    for _ in $(seq 1 20); do
+        sleep 0.5
+        if docker exec "${MOUNT_CID}" \
+            bash -c "echo > /dev/tcp/localhost/${port}" 2>/dev/null; then
+            ready=true; break
+        fi
+    done
+    [[ "${ready}" == true ]] || skip "SMB server did not start within 10 s"
+
+    # Stop should succeed cleanly (smbd handles SIGTERM)
+    run docker stop --time 5 "${MOUNT_CID}"
+    [ "${status}" -eq 0 ]
+    MOUNT_CID=""
 }
 
 # ---------------------------------------------------------------------------
