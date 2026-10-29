@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+# update-formula — point the Homebrew formula at a pushed release tag.
+#
+# Copyright (C) 2026 1121 Citrus
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# SYNOPSIS
+#   update-formula <tag>
+#   update-formula --help
+#
+# DESCRIPTION
+#   Fetches the GitHub-generated source tarball for <tag>, computes its
+#   sha256, and rewrites the formula's url/sha256 fields to match.
+#
+#   <tag> must already exist on origin. GitHub only generates a tag's
+#   archive tarball (and therefore its checksum) once the tag has been
+#   pushed, so this cannot be run as part of the version-bump commit
+#   itself — it is a separate, second step run after that tag is on
+#   origin. See "Releasing" in CONTRIBUTING.md.
+#
+# OPTIONS
+#   --help   Print this help and exit.
+#
+# EXAMPLES
+#   ./install/homebrew/update-formula v1.6.1
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FORMULA="${SCRIPT_DIR}/Formula/usb-explore.rb"
+REPO_URL="https://github.com/1121citrus/usb-explore"
+
+log()  { printf "update-formula: %s\n" "$*" >&2; }
+die()  { printf "update-formula: error: %s\n" "$*" >&2; exit 1; }
+
+[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && {
+    awk '/^# SYNOPSIS/{f=1;next} /^#$/{if(f)exit} f{sub(/^# ?/,""); print}' \
+        "${BASH_SOURCE[0]}"
+    exit 0
+}
+
+TAG="${1:?usage: update-formula <tag> (e.g. v1.6.1)}"
+TARBALL_URL="${REPO_URL}/archive/refs/tags/${TAG}.tar.gz"
+
+[[ -f "${FORMULA}" ]] || die "formula not found: ${FORMULA}"
+
+log "fetching ${TARBALL_URL}"
+sha="$(curl -fsSL "${TARBALL_URL}" | shasum -a 256 | cut -d' ' -f1)"
+[[ "${sha}" =~ ^[0-9a-f]{64}$ ]] || die "could not compute a sha256 (is ${TAG} pushed to origin?)"
+
+tmp="$(mktemp)"
+sed -e "s#archive/refs/tags/v[0-9][0-9A-Za-z.-]*\.tar\.gz#archive/refs/tags/${TAG}.tar.gz#" \
+    -e "s/sha256 \"[0-9a-f]\{64\}\"/sha256 \"${sha}\"/" \
+    "${FORMULA}" > "${tmp}"
+mv "${tmp}" "${FORMULA}"
+
+log "formula now points to ${TAG} (sha256 ${sha})"

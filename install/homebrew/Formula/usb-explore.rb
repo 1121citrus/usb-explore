@@ -1,16 +1,15 @@
 # Homebrew formula for usb-explore.
 #
-# Installation:
-#   brew tap 1121citrus/usb-explore https://github.com/1121citrus/usb-explore
-#   brew install usb-explore
-#
-# Or install directly from a local clone:
+# Not published as a tap; install directly from a local clone:
 #   brew install --formula ./install/homebrew/Formula/usb-explore.rb
+#
+# url/sha256 must be updated after every release — see "Releasing" in
+# CONTRIBUTING.md and install/homebrew/update-formula.
 class UsbExplore < Formula
   desc "Explore Linux USB disk images from macOS via Docker"
   homepage "https://github.com/1121citrus/usb-explore"
-  url "https://github.com/1121citrus/usb-explore/archive/refs/tags/v1.5.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  url "https://github.com/1121citrus/usb-explore/archive/refs/tags/v1.6.0.tar.gz"
+  sha256 "fb3bc4087842e4746d2042e4de6e9e43ef03aa6eb9f126bc6b35c2005673116a"
   license "AGPL-3.0-or-later"
   head "https://github.com/1121citrus/usb-explore.git", branch: "main"
 

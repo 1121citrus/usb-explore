@@ -66,6 +66,40 @@ Use conventional commits: `type(scope): summary`.
 Required body sections: `What changed`, `Why this change`,
 `Behavioral impact` or `Validation`.
 
+## Releasing
+
+Releasing is two steps, in this order, because of a chicken-and-egg
+constraint: GitHub only generates a tag's source tarball — and
+therefore its sha256 — once that tag exists on `origin`. The Homebrew
+formula's checksum can't be computed until after the tag is pushed,
+so it can't be fixed in the same commit that creates the tag.
+
+1. **Cut the release.**
+   - Bump `version.txt` and promote `CHANGELOG.md`'s `[Unreleased]`
+     section to a dated version section.
+   - Push `main` and the new tag together, atomically:
+     `git push --atomic origin main vX.Y.Z`.
+2. **Update the Homebrew formula.** Once the tag is live on `origin`:
+
+   ```bash
+   ./install/homebrew/update-formula vX.Y.Z
+   ```
+
+   This fetches the tag's GitHub-generated tarball, computes its real
+   sha256, and rewrites `install/homebrew/Formula/usb-explore.rb`'s
+   `url`/`sha256` fields in place. Commit and push this separately —
+   it does not need its own version bump or tag.
+
+Skipping step 2 is the project's most common release mistake: the
+formula's `url` silently points at a stale release, and
+`brew install --formula ./install/homebrew/Formula/usb-explore.rb`
+(the method documented in `README.md`) fails Homebrew's checksum
+verification against whatever `sha256` was last committed. Only
+`brew install --HEAD ...` (as used by `install/homebrew/test-formula`)
+bypasses the `url`/`sha256` fields entirely, so that test path does
+not catch a stale formula — step 2 must be done by hand, every
+release.
+
 ## Licence
 
 By contributing you agree that your contributions will be licenced under
