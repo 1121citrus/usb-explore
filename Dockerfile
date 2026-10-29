@@ -60,7 +60,18 @@ RUN apt-get update \
       util-linux \
       xfsprogs \
       xz-utils \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ # python3-dnspython and python3-markdown are hard Depends of python3-samba
+ # (pulled in transitively via samba -> python3-samba), used only by optional
+ # AD-DC tooling (samba-tool, samba_dnsupdate) that this image never invokes —
+ # only the smbd binary is exec'd (see src/container/dispatch.sh). Both carry
+ # scanner findings with no Ubuntu-packaged fix (CVE-2026-114605 HIGH in
+ # dnspython, CVE-2025-69534 MEDIUM in markdown). Force-removing them (dpkg
+ # refuses a plain --remove because samba/python3-samba still declare the
+ # dependency) drops the vulnerable code from the image entirely rather than
+ # just waiving the finding; `import samba`, `smbd --version`, and
+ # `testparm --version` all remain functional without them.
+ && dpkg --force-depends --purge python3-dnspython python3-markdown
 
 RUN mkdir -p /mnt/part /out /ref
 

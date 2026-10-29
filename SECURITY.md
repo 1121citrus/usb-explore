@@ -92,44 +92,88 @@ source image is never modified.
 
 ## CVE tracking
 
-The CI pipeline scans every build with **Trivy**, **Grype**, and
-**Docker Scout**, and blocks on any unfixed **HIGH** or **CRITICAL**
-finding. **MEDIUM** and **LOW** findings are advisory and are reviewed
-and accepted below.
+The local `./build` script scans every image with **Trivy** (gating:
+`--severity HIGH,CRITICAL --ignore-unfixed`), **Grype** (full severity,
+no unfixed filter), and **Docker Scout**. The CI pipeline
+(`.github/workflows/scan.yml`) runs the same Trivy gate. **MEDIUM** and
+**LOW** findings are reviewed and accepted below; none are currently
+suppressed via `.trivyignore.yaml` or `.grype.yaml` — those files stay
+as placeholders for a future finding that genuinely needs a
+time-boxed waiver (see the `expired_at` convention in
+`.trivyignore.yaml`), rather than parking every accepted exception
+there.
 
-As of the storage-layer dev build (scanned 2026-06-21):
+As of the 2026-10-28 review (image built from `ubuntu:24.04`, arm64):
 
 - **CRITICAL: 0** and **HIGH: 0** across Trivy, Grype, and Scout.
-- The storage-layer packages added by this feature — `cryptsetup-bin`,
-  `lvm2`, and their libraries (`libcryptsetup12`, `libdevmapper1.02.1`,
-  `libdevmapper-event1.02.1`, `liblvm2cmd2.03`, `dmsetup`, `dmeventd`)
-  — produce **no scanner findings**. The feature introduces no new CVEs.
-- The image already runs `apt-get upgrade` during build, so packages
-  are at the latest patched Ubuntu 24.04 versions. The residual
-  MEDIUM/LOW findings are inherited from the `ubuntu:24.04` base and are
-  unfixed or marked "won't fix" upstream.
+- Docker Scout had previously flagged **CVE-2026-114605** (HIGH,
+  "Uncontrolled Recursion", CVSS 7.5) in `dnspython`, and Grype flagged
+  **CVE-2025-69534** (Medium) in `python3-markdown`. Both packages are
+  hard `Depends` of `python3-samba` (pulled in transitively via
+  `samba`), used only by Samba's optional AD-DC tooling
+  (`samba-tool`, `samba_dnsupdate`) — this image execs only the
+  `smbd` binary (`src/container/dispatch.sh:611`) and never loads
+  Samba's Python bindings. The Dockerfile now force-purges both
+  packages after install (`dpkg --force-depends --purge`), removing the
+  vulnerable code from the image instead of carrying a waiver;
+  `import samba`, `smbd --version`, and `testparm --version` remain
+  functional without them. This was the only pair of findings in this
+  review with any upstream fix at all (dnspython 2.9.0, Markdown
+  3.8.1 — neither yet packaged for Ubuntu 24.04).
+- `apt-get upgrade` already runs during build, so every package is at
+  the latest version Ubuntu 24.04's repositories offer; confirmed via
+  `apt-get upgrade` reporting "0 upgraded" against a freshly updated
+  package index. Every remaining finding below has Grype
+  `fix.state: not-fixed` or `wont-fix` — Ubuntu has not shipped (or, for
+  `wont-fix`, will never ship) a patched package version. There is
+  nothing left to fix by bumping a version pin or re-running the build.
 
-Accepted MEDIUM/LOW findings (canonical set per Docker Scout; Grype
-reports a larger superset of the same `ubuntu:24.04` base packages):
+Accepted MEDIUM/LOW findings (Grype full-severity scan; `fix` is
+Grype's `fix.state` — `not-fixed` means no Ubuntu 24.04 package exists
+yet, `wont-fix` means Ubuntu/Debian has decided not to patch it):
 
-| Package | CVE(s) | Severity | Reason accepted |
-| --- | --- | --- | --- |
-| glibc (`libc6`, `libc-bin`) | CVE-2026-6238, CVE-2026-5435, CVE-2026-4438, CVE-2026-4437, CVE-2026-4046 | Medium | No upstream fix; local parsing/DoS issues not reachable from this read-only, offline tool. |
-| `python3.12` | CVE-2025-13462, CVE-2026-2297 | Medium | Python is a build/runtime dependency of `mc`/utilities, not exposed to untrusted network input. No fix available. |
-| `expat` (`libexpat1`) | CVE-2025-66382 | Medium | XML parser not invoked on attacker-controlled data in this tool. No fix available. |
-| `tar` | CVE-2025-45582 | Medium | `tar` is used only for the explicit `archive` subcommand on user-chosen paths. No fix available. |
-| `util-linux` | CVE-2026-27456 | Medium | Inherited base CVE; no fix available. |
-| `dpkg` | CVE-2026-2219 | Medium | `dpkg` is not used at runtime (no package manager operations). No fix available. |
-| `libgcrypt20` | CVE-2024-2236 | Low | No fix available; not reachable in normal operation. |
-| `icu` (`libicu74`) | CVE-2025-5222 | Low | No fix available; not reachable in normal operation. |
-| `systemd` (`libsystemd0`, `libudev1`) | CVE-2026-40228 | Low | systemd is not run as PID 1 in this ephemeral container. No fix available. |
-| `shadow` (`login`, `passwd`) | CVE-2024-56433 | Low | No interactive login surface; container is `--rm` and non-persistent. No fix available. |
+| Package(s) | Count | Severity | Fix | Reason accepted |
+| --- | --- | --- | --- | --- |
+| `rsync` | 33 | Medium | not-fixed | Only invoked locally by the `capture`/`clean --update-volume` subcommands against a user-chosen path or device; no `rsync --daemon` or network listener runs. |
+| `libpython3.12-*`, `python3.12*` | 26 | Medium | not-fixed/wont-fix | CPython is a dependency of Samba's Python bindings and `mc`; usb-explore never execs `python3` with attacker-controlled input or untrusted scripts. |
+| `libcups2t64` | 11 | Medium | not-fixed | CUPS client libraries pulled in by `samba-libs`; no CUPS daemon or print service runs in this image. |
+| `jq`, `libjq1` | 10 | Medium | not-fixed | `jq` processes only the tool's own JSON output/config, never untrusted network input. |
+| `libpcre2-8-0` | 7 | Medium | not-fixed | Regex engine linked by several tools; requires a crafted pattern as input, not reachable from attacker-controlled data here. |
+| `libc-bin`, `libc6` | 6 | Medium | not-fixed | glibc base; local parsing/DoS issues not reachable from this read-only, offline tool. |
+| `libgnutls30t64` | 6 | Medium | not-fixed | TLS library pulled by `samba`/`cryptsetup-bin`; this image runs no TLS or network service. |
+| `bsdutils`, `fdisk`, `libblkid1`, `libfdisk1`, `libmount1`, `libsmartcols1`, `libuuid1`, `mount`, `util-linux` | 4 | Medium | not-fixed | Core partition/mount tooling — this tool's entire purpose is parsing a disk image the user already controls and chose to mount; same threat model as any disk-utility GUI. |
+| `libexpat1` | 4 | Medium | not-fixed | XML parser not invoked on attacker-controlled data in this tool. |
+| `libpopt0` | 3 | Medium | not-fixed | Command-line option parser linked by `lvm2`/Samba tools; parses only this container's own fixed argv. |
+| `libavahi-client3`, `libavahi-common-data`, `libavahi-common3` | 3 | Low/Medium | not-fixed | Client stub `smbd` links to register the share over mDNS; the vulnerable `avahi-daemon` process (which parses inbound mDNS packets) is never started in this image. |
+| `libgssapi-krb5-2`, `libk5crypto3`, `libkrb5-3`, `libkrb5support0` | 2 | Medium | not-fixed | Kerberos/GSSAPI libraries pulled by Samba for optional AD authentication; `smb.conf` here is `server role = standalone` with guest-only access, so GSSAPI is never negotiated. |
+| `libtirpc-common`, `libtirpc3t64` | 2 | Medium | not-fixed | Legacy Sun RPC compatibility library pulled by Samba; no RPC/portmapper service runs. |
+| `libacl1` | 2 | Medium | wont-fix | ACL library linked by `util-linux`/Samba; no fix planned upstream, not reachable from untrusted input in this tool's usage. |
+| `dash` | 2 | Medium | not-fixed | `/bin/sh`; CVEs require executing an attacker-supplied shell script, and this image only runs its own first-party scripts. |
+| `erofs-utils` | 2 | Medium | not-fixed | Requires a maliciously crafted EROFS filesystem — same accepted threat model as the other filesystem-parsing tools above. |
+| `tar` | 2 | Medium | not-fixed | Used only by the explicit `archive` subcommand on user-chosen paths. |
+| `gpgv` | 2 | Low | not-fixed/wont-fix | Not exercised by any usb-explore subcommand; pulled in transitively. |
+| `libslang2` | 2 | Low | not-fixed | Terminal UI library used by `mc`, an optional interactive tool the user runs themselves inside their own container session. |
+| `dmeventd`, `dmsetup`, `libdevmapper-event1.02.1`, `libdevmapper1.02.1`, `liblvm2cmd2.03`, `lvm2` | 1 | Medium | not-fixed | `dmeventd` (the LVM event-monitoring daemon) is never started; the `lvm` driver only runs one-shot `vgchange`/`lvcm`-style invocations. |
+| `libglib2.0-0t64` | 1 | Medium | not-fixed | Linked transitively by Samba/D-Bus-related libraries; not exercised via untrusted network input. |
+| `liblmdb0` | 1 | Medium | not-fixed | Embedded database linked by Samba's internal registry, touching only this container's own local config state. |
+| `libpam-modules`, `libpam-modules-bin`, `libpam-runtime`, `libpam0g` | 1 | Medium | wont-fix | PAM stack pulled by Samba; no interactive login surface, container is `--rm` and non-persistent. |
+| `libsasl2-2`, `libsasl2-modules-db` | 1 | Medium | not-fixed | SASL library pulled by Samba for optional auth mechanisms; the guest-only standalone `smb.conf` never negotiates SASL. |
+| `perl-base` | 1 | Medium | not-fixed | Minimal Perl runtime pulled in transitively; usb-explore never execs a Perl script with untrusted input. |
+| `coreutils` | 1 | Low | wont-fix | Long-standing `shred`/symlink-handling note; no fix planned upstream. |
+| `icu` (`libicu74`) | 1 | Low | not-fixed | No fix available; not reachable in normal operation. |
+| `systemd` (`libsystemd0`, `libudev1`) | 1 | Low | not-fixed | systemd is not run as PID 1 in this ephemeral container. |
+| `shadow` (`login`, `passwd`) | 1 | Low | not-fixed | No interactive login surface; container is `--rm` and non-persistent. |
 
 These findings are accepted because the image is an ephemeral,
 `--rm`, read-only forensic tool that runs inside the Docker Desktop
 Linux VM (see *Privileged container* above) and never processes
 untrusted network input. They are re-reviewed on every base-image
 refresh and will be dropped from this list as Ubuntu ships fixes.
+Re-run the scan locally with `./build --no-test` to get the current,
+itemized findings — the table above is a point-in-time snapshot and
+the CVE IDs within each row will shift (mostly on `rsync` and
+`python3.12`, both under active CVE assignment as of this review)
+between reviews.
 
 ## Reporting a vulnerability
 
