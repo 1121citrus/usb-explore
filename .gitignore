@@ -2,3 +2,4 @@
 *.img.gz
 *.iso
 !test/fixtures/showcase-home.img.gz
+.envrc
