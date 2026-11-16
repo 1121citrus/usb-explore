@@ -66,6 +66,22 @@ Use conventional commits: `type(scope): summary`.
 Required body sections: `What changed`, `Why this change`,
 `Behavioral impact` or `Validation`.
 
+## Protected branches and tags
+
+`main` cannot be force-pushed or deleted. The required GitHub Actions checks
+are listed in **Settings > Rules > Rulesets > Require main checks**. Missing
+or failed checks block updates; GitHub also accepts skipped and neutral
+results. The repository owner is the only actor allowed to create, update,
+or delete `v*` tags.
+
+Inspect and fix failed Actions runs before retrying. If a check is missing,
+verify that its workflow runs on the source branch. After renaming a check,
+verify the new name on a branch and update the ruleset before promoting that
+change to `main`.
+
+The required Gitleaks check is named `Secret scan`. Keep its generator
+configuration and the ruleset aligned if the name changes.
+
 ## Releasing
 
 Releasing is two steps, in this order, because of a chicken-and-egg
@@ -77,7 +93,10 @@ so it can't be fixed in the same commit that creates the tag.
 1. **Cut the release.**
    - Bump `version.txt` and promote `CHANGELOG.md`'s `[Unreleased]`
      section to a dated version section.
-   - Push `main` and the new tag together, atomically:
+   - Validate that release commit on `staging` and fast-forward local `main`
+     to the checked commit.
+   - After approval, the repository owner pushes `main` and the new tag
+     together, atomically:
      `git push --atomic origin main vX.Y.Z`.
 2. **Update the Homebrew formula.** Once the tag is live on `origin`:
 
@@ -87,8 +106,9 @@ so it can't be fixed in the same commit that creates the tag.
 
    This fetches the tag's GitHub-generated tarball, computes its real
    sha256, and rewrites `install/homebrew/Formula/usb-explore.rb`'s
-   `url`/`sha256` fields in place. Commit and push this separately —
-   it does not need its own version bump or tag.
+   `url`/`sha256` fields in place. Commit this separately, validate it on a
+   non-`main` branch, and promote it after approval. It does not need its
+   own version bump or tag.
 
 Skipping step 2 is the project's most common release mistake: the
 formula's `url` silently points at a stale release, and
